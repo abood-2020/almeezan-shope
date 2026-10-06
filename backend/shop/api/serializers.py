@@ -90,6 +90,26 @@ def trader_payload(trader):
     }
 
 
+def invoice_payload(invoice):
+    if invoice.file:
+        file_url = invoice.file.url
+    else:
+        file_url = invoice.file_ref or ""
+    return {
+        "id": invoice.number,
+        "number": invoice.number,
+        "trader_id": invoice.trader_id,
+        "date": invoice.issued_on.isoformat(),
+        "amount": money(invoice.amount),
+        "file_url": file_url,
+        "file_name": invoice.file_name,
+    }
+
+
+def settings_payload(setting):
+    return {"company_whatsapp_number": setting.company_whatsapp_number}
+
+
 def category_payload(category):
     return {
         "id": category.id,

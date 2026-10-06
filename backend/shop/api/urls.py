@@ -1,9 +1,12 @@
-from django.urls import path
+from django.urls import include, path
 
+from shop.api.admin_urls import urlpatterns as admin_urlpatterns
 from shop.api.views import (
     CategoryListView,
     CsrfView,
     CurrentPricingView,
+    InvoiceDetailView,
+    InvoiceListView,
     LoginView,
     LogoutView,
     MeView,
@@ -11,6 +14,7 @@ from shop.api.views import (
     OrderListCreateView,
     ProductDetailView,
     ProductListView,
+    PublicSettingsView,
 )
 
 urlpatterns = [
@@ -24,4 +28,8 @@ urlpatterns = [
     path("pricing/current/", CurrentPricingView.as_view(), name="pricing-current"),
     path("orders/", OrderListCreateView.as_view(), name="orders"),
     path("orders/<str:order_number>/", OrderDetailView.as_view(), name="order-detail"),
+    path("invoices/", InvoiceListView.as_view(), name="invoices"),
+    path("invoices/<str:invoice_id>/", InvoiceDetailView.as_view(), name="invoice-detail"),
+    path("settings/", PublicSettingsView.as_view(), name="settings"),
+    path("admin/", include(admin_urlpatterns)),
 ]

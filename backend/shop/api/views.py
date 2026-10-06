@@ -14,12 +14,14 @@ from shop.api.serializers import (
     OrderCreateSerializer,
     OrderSerializer,
     category_payload,
+    invoice_payload,
     money,
     product_payload,
+    settings_payload,
     trader_payload,
 )
-from shop.models import Category, Order
-from shop.services import catalog_products, create_order, get_active_trader, login_trader
+from shop.models import Category, Invoice, Order
+from shop.services import catalog_products, create_order, get_active_trader, get_site_settings, login_trader
 
 
 def validation_error(exc):
@@ -154,3 +156,30 @@ class OrderDetailView(APIView):
         if order is None:
             return Response({"detail": "Not found."}, status=404)
         return Response(OrderSerializer(order).data)
+
+
+class InvoiceListView(APIView):
+    permission_classes = [IsActiveTrader]
+
+    def get(self, request):
+        trader = get_active_trader(request.user)
+        invoices = Invoice.objects.filter(trader=trader).select_related("trader")
+        return Response([invoice_payload(invoice) for invoice in invoices])
+
+
+class InvoiceDetailView(APIView):
+    permission_classes = [IsActiveTrader]
+
+    def get(self, request, invoice_id):
+        trader = get_active_trader(request.user)
+        invoice = Invoice.objects.filter(trader=trader, number=invoice_id).select_related("trader").first()
+        if invoice is None:
+            return Response({"detail": "Not found."}, status=404)
+        return Response(invoice_payload(invoice))
+
+
+class PublicSettingsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response(settings_payload(get_site_settings()))

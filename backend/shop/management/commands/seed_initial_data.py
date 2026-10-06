@@ -334,6 +334,18 @@ class Command(BaseCommand):
         )
         SiteSetting.objects.update_or_create(pk=1, defaults={"company_whatsapp_number": ""})
 
+        admin_user, admin_created = User.objects.get_or_create(
+            username="admin",
+            defaults={"email": "admin@example.com", "is_staff": True, "is_superuser": True},
+        )
+        if admin_created:
+            admin_user.set_password("demo123")
+        admin_user.email = "admin@example.com"
+        admin_user.is_staff = True
+        admin_user.is_superuser = True
+        admin_user.is_active = True
+        admin_user.save()
+
         self.stdout.write(self.style.SUCCESS(
             "Seed complete: "
             f"{Category.objects.count()} categories, "
