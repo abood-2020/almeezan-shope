@@ -182,7 +182,11 @@ class PriceList(models.Model):
 
     def price_for(self, product):
         """ILS lists fall back to the product base price. Other currencies do not."""
-        item = self.items.filter(product=product).first()
+        prefetched = getattr(product, "_prefetched_objects_cache", {}).get("price_list_items")
+        if prefetched is not None:
+            item = next((row for row in prefetched if row.price_list_id == self.id), None)
+        else:
+            item = self.items.filter(product=product).first()
         if item is not None:
             return item.price
         if self.currency_id == "ILS":
