@@ -30,6 +30,15 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# backend
+backend/.venv/
+backend/db.sqlite3
+backend/media/
+backend/staticfiles/
+**/__pycache__/
+*.py[cod]
 
 # vercel
 .vercel
