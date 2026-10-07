@@ -1,5 +1,5 @@
 export type Product={id:number;ar:string;en:string;code:string;cat:number;price:number;unit:string;unitEn:string;min:number;available:boolean;image:string;gallery?:string[];badge?:string;desc:string;descEn:string;options:string[];colors?:{ar:string;en:string;hex:string;image?:string}[];sizes?:string[];unavailableVariants?:string[]};
-export const assetSrc=(asset:string)=>asset.startsWith('blob:')||asset.startsWith('data:')||asset.startsWith('/')?asset:`/assets/${asset}.jpg`;
+export const assetSrc=(asset:string)=>!asset?'':asset.startsWith('blob:')||asset.startsWith('data:')||asset.startsWith('http://')||asset.startsWith('https://')||asset.startsWith('/')?asset:`/assets/${asset}.jpg`;
 export const productImageSrc=(product:Product,colorIndex=0)=>assetSrc(product.colors?.[colorIndex]?.image||product.image);
 export const productImageForOption=(product:Product,option:string)=>{
   const colorIndex=product.colors?.findIndex(c=>option.startsWith(`${c.ar} / ${c.en} · `))??-1;

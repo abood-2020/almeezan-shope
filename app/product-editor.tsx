@@ -5,7 +5,7 @@ import {Dialog,DialogContent,DialogDescription,DialogTitle} from '@/components/u
 import {assetSrc,type Product} from './data';
 
 type Category={ar:string;en:string};
-type Props={initial:Product|null;lang:'ar'|'en';categories:Category[];onClose:()=>void;onSave:(product:Product)=>boolean};
+type Props={initial:Product|null;lang:'ar'|'en';categories:Category[];onClose:()=>void;onSave:(product:Product)=>boolean|Promise<boolean>};
 type Color=NonNullable<Product['colors']>[number];
 const validHex=(value:string)=>/^#[0-9a-fA-F]{6}$/.test(value);
 
@@ -34,7 +34,7 @@ export default function ProductEditor({initial,lang,categories,onClose,onSave}:P
  };
  const setCover=(src:string)=>{if(src===draft.image)return;update({image:src,gallery:[...(draft.gallery||[]).filter(x=>x!==src),...(draft.image?[draft.image]:[])]});setActivePreview(src)};
  const removeImage=(src:string)=>{const remaining=gallery.filter(x=>x!==src);update({image:src===draft.image?(remaining[0]||''):draft.image,gallery:remaining.slice(src===draft.image?1:0).filter(x=>x!==draft.image)});setActivePreview('')};
- const submit=(event:React.FormEvent<HTMLFormElement>)=>{
+ const submit=async(event:React.FormEvent<HTMLFormElement>)=>{
   event.preventDefault();
   if(!draft.image){setError(t('أضف صورة أساسية واحدة على الأقل للمنتج.','Add at least one product photo.'));return}
   const colors=(draft.colors||[]).map(c=>({...c,ar:c.ar.trim(),en:c.en.trim(),hex:c.hex.toUpperCase()}));
@@ -46,7 +46,7 @@ export default function ProductEditor({initial,lang,categories,onClose,onSave}:P
   if(!options.length){setError(t('أضف الألوان والمقاسات أو خيار بيع واحدًا على الأقل.','Add colors and sizes or at least one selling option.'));return}
   const validVariants=(draft.unavailableVariants||[]).filter(x=>options.includes(x));
   const saved={...draft,ar:draft.ar.trim(),en:draft.en.trim(),code:draft.code.trim(),unit:draft.unit.trim(),unitEn:draft.unitEn.trim(),colors,sizes,options,unavailableVariants:validVariants};
-  if(onSave(saved))onClose();
+  if(await onSave(saved))onClose();
  };
  return <Dialog open={!!initial} onOpenChange={open=>{if(!open)onClose()}}><DialogContent className="product-editor-dialog" dir={en?'ltr':'rtl'} showCloseButton={false}>
   <div className="product-editor-head"><div><span className="product-editor-kicker">{t('إدارة المنتجات','PRODUCT MANAGEMENT')}</span><DialogTitle>{draft.id?t('تعديل المنتج','Edit product'):t('إضافة منتج جديد','Add a product')}</DialogTitle><DialogDescription>{t('أدخل البيانات والصور والألوان في مكان واحد. التغييرات ضمن هذه الجلسة التجريبية.','Enter details, photos and colors in one place. Changes last for this demo session.')}</DialogDescription></div><button type="button" className="product-editor-close" onClick={onClose} aria-label={t('إغلاق','Close')}><X size={20}/></button></div>

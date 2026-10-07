@@ -298,6 +298,11 @@ def _sync_choices(product, data, creating):
     if not labels:
         raise ValidationError({"options": ["Add at least one selling option."]})
 
+    previous_color_files = {
+        (color.name_ar, color.name_en): color.image.name
+        for color in product.colors.all()
+        if color.image
+    }
     product.options.all().delete()
     product.colors.all().delete()
     product.sizes.all().delete()
@@ -312,6 +317,11 @@ def _sync_choices(product, data, creating):
         )
         for index, name_ar, name_en, hex_code, image_key in colors
     ]
+    for row in color_rows:
+        previous = previous_color_files.get((row.name_ar, row.name_en))
+        if previous and not row.image:
+            row.image.name = previous
+            row.save(update_fields=["image"])
     size_rows = [
         ProductSize.objects.create(product=product, value=value, sort_order=index)
         for index, value in sizes
