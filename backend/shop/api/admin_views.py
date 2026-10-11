@@ -27,7 +27,7 @@ from shop.api.admin_serializers import (
     price_list_payload,
 )
 from shop.api.permissions import IsStaffUser
-from shop.api.serializers import LoginSerializer, category_payload, settings_payload
+from shop.api.serializers import LoginSerializer, category_payload, category_payloads, settings_payload
 from shop.api.views import validation_error
 from shop.models import Category, Currency, Invoice, Order, PriceList, Product, ProductColor, ProductImage, Trader
 from shop.services import (
@@ -154,7 +154,7 @@ class AdminProductColorImageView(AdminAPIView):
 
 class AdminCategoryListView(AdminAPIView):
     def get(self, request):
-        return Response([category_payload(category) for category in Category.objects.all()])
+        return Response(category_payloads(Category.objects.all()))
 
     def post(self, request):
         serializer = CategoryWriteSerializer(data=request.data)

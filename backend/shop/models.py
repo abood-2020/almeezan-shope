@@ -11,21 +11,92 @@ CURRENCY_CODE_VALIDATOR = RegexValidator(r"^[A-Za-z]{3}$", "Currency code must b
 
 
 class Category(models.Model):
-    """Real catalog category. Frontend index 0 (All products) is not stored."""
+    """Catalog category. A category may nest under another, up to three levels."""
 
     name_ar = models.CharField(max_length=120)
     name_en = models.CharField(max_length=120)
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="children",
+    )
+    sort_order = models.PositiveIntegerField(default=0)
     image_key = models.CharField(max_length=255, blank=True)
     image = models.FileField(upload_to="categories/", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["id"]
+        ordering = ["sort_order", "id"]
         verbose_name_plural = "categories"
 
     def __str__(self):
         return self.name_en
+
+    def clean(self):
+        if self.pk and self.parent_id == self.pk:
+            raise ValidationError({"parent": "A category cannot be its own parent."})
+        seen = {self.pk} if self.pk else set()
+        current = self.parent_id
+        depth = 1
+        while current:
+            if current in seen:
+                raise ValidationError({"parent": "This parent would create a circular category."})
+            seen.add(current)
+            current = Category.objects.filter(pk=current).values_list("parent_id", flat=True).first()
+            depth += 1
+            if depth > 12:
+                raise ValidationError({"parent": "This parent would create a circular category."})
+        if depth > 3:
+            raise ValidationError({"parent": "Categories cannot be nested more than three levels."})
+        if self.pk and depth + _descendant_depth(self.pk) > 3:
+            raise ValidationError({
+                "parent": "Moving this category would place a descendant below level 3.",
+            })
+        errors = {}
+        siblings = Category.objects.filter(parent_id=self.parent_id)
+        if self.pk:
+            siblings = siblings.exclude(pk=self.pk)
+        if self.name_ar and siblings.filter(name_ar=self.name_ar).exists():
+            errors["name_ar"] = "A category with this Arabic name already exists under the same parent."
+        if self.name_en and siblings.filter(name_en=self.name_en).exists():
+            errors["name_en"] = "A category with this English name already exists under the same parent."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if not kwargs.get("raw"):
+            self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+def _descendant_depth(category_id, seen=None):
+    """Levels that exist below this category. A leaf returns 0."""
+    seen = set() if seen is None else seen
+    if category_id in seen:
+        return 0
+    seen.add(category_id)
+    child_ids = list(Category.objects.filter(parent_id=category_id).values_list("id", flat=True))
+    if not child_ids:
+        return 0
+    return 1 + max(_descendant_depth(child_id, seen) for child_id in child_ids)
+
+
+def category_descendant_ids(category_id):
+    """The category itself plus every descendant, for product filtering."""
+    found = []
+    frontier = [category_id]
+    seen = set()
+    while frontier:
+        current = frontier.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        found.append(current)
+        frontier.extend(Category.objects.filter(parent_id=current).values_list("id", flat=True))
+    return found
 
 
 class Product(models.Model):

@@ -2,7 +2,7 @@ import {api, fileFromBlob, resolveMedia} from "./api";
 import type {CartLine, Order, Product} from "./data";
 import type {PriceList} from "./pricing";
 
-export type ApiCategory = {id: number; name_ar: string; name_en: string; image: string};
+export type ApiCategory = {id: number; name_ar: string; name_en: string; image: string; parent_id?: number | null; level?: number; children?: number[]};
 export type ApiColor = {id?: number; name_ar: string; name_en: string; hex: string; image: string};
 export type ApiImage = {id: number; url: string; image_key: string; sort_order: number; is_primary: boolean};
 export type ApiProduct = {
@@ -57,7 +57,7 @@ export type ApiPriceList = {
   prices: {product_id: number; price: string | null}[];
 };
 export type ApiCurrency = {code: string; name: string; symbol: string};
-export type UiCategory = {id?: number; ar: string; en: string; img?: string};
+export type UiCategory = {id?: number; ar: string; en: string; img?: string; parentId?: number | null; level?: number};
 export type UiTrader = {id: string; ar: string; en: string; username: string; email: string; list: string; active: boolean};
 export type UiCurrency = {id: string; name: string; symbol: string};
 export type UiInvoice = {id: string; date: string; merchant: string; amount: number; url: string; name: string};
@@ -65,12 +65,26 @@ export type UiInvoice = {id: string; date: string; merchant: string; amount: num
 const ALL_CATEGORY: UiCategory = {ar: "جميع المنتجات", en: "All products"};
 
 export function categoriesFromApi(rows: ApiCategory[]): UiCategory[] {
-  return [ALL_CATEGORY, ...[...rows].sort((a, b) => a.id - b.id).map(row => ({
+  const nodes = rows.map(row => ({
     id: row.id,
     ar: row.name_ar,
     en: row.name_en,
     img: resolveMedia(row.image),
-  }))];
+    parentId: row.parent_id ?? null,
+  }));
+  const ordered: UiCategory[] = [];
+  const walk = (parentId: number | null, level: number) => {
+    nodes
+      .filter(node => (node.parentId ?? null) === parentId)
+      .sort((a, b) => a.id - b.id)
+      .forEach(node => {
+        ordered.push({...node, level});
+        if (level < 3) walk(node.id, level + 1);
+      });
+  };
+  walk(null, 1);
+  nodes.filter(node => !ordered.some(item => item.id === node.id)).forEach(node => ordered.push({...node, level: 1}));
+  return [ALL_CATEGORY, ...ordered];
 }
 
 export function productFromApi(row: ApiProduct, categories: UiCategory[], useBasePrice: boolean): Product {

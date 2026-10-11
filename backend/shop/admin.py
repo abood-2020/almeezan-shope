@@ -50,9 +50,10 @@ class PriceListItemInline(admin.TabularInline):
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("id", "name_ar", "name_en", "image_key")
+    list_display = ("id", "name_ar", "name_en", "parent", "sort_order", "image_key")
     search_fields = ("name_ar", "name_en", "image_key")
-    ordering = ("id",)
+    list_filter = ("parent",)
+    ordering = ("sort_order", "id")
 
 
 @admin.register(Product)

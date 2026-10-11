@@ -13,14 +13,14 @@ from shop.api.serializers import (
     LoginSerializer,
     OrderCreateSerializer,
     OrderSerializer,
-    category_payload,
+    category_payloads,
     invoice_payload,
     money,
     product_payload,
     settings_payload,
     trader_payload,
 )
-from shop.models import Category, Invoice, Order
+from shop.models import Category, Invoice, Order, category_descendant_ids
 from shop.services import catalog_products, create_order, get_active_trader, get_site_settings, login_trader
 
 
@@ -74,8 +74,7 @@ class CategoryListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        categories = Category.objects.order_by("id")
-        return Response([category_payload(category) for category in categories])
+        return Response(category_payloads(Category.objects.all()))
 
 
 class ProductListView(APIView):
@@ -85,6 +84,15 @@ class ProductListView(APIView):
         trader = get_active_trader(request.user)
         price_list = trader.price_list if trader else None
         products = catalog_products(trader)
+        selected = request.query_params.get("category")
+        if selected not in (None, ""):
+            try:
+                category_id = int(selected)
+            except (TypeError, ValueError):
+                return Response({"detail": "Invalid category."}, status=400)
+            if not Category.objects.filter(pk=category_id).exists():
+                return Response({"detail": "Not found."}, status=404)
+            products = products.filter(category_id__in=category_descendant_ids(category_id))
         return Response([product_payload(product, price_list) for product in products])
 
 

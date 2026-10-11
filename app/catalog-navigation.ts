@@ -1,40 +1,55 @@
 import type {Product} from './data';
 
-// Product types are inferred from actual item names; absent types never create links.
-const productTypes = [
-  {id:'tees',ar:'تيشيرتات',en:'T-shirts',match:/تيشيرت|تي.?شرت|\btee\b|t-shirt/i},
-  {id:'shirts',ar:'قمصان',en:'Shirts',match:/قميص|قمصان|\bshirt\b/i},
-  {id:'trousers',ar:'بناطيل',en:'Trousers',match:/بنطال|بناطيل|trousers|pants/i},
-  {id:'blazers',ar:'بليزرات',en:'Blazers',match:/بليزر|blazer/i},
-  {id:'dresses',ar:'فساتين',en:'Dresses',match:/فستان|فساتين|dress/i},
-  {id:'sets',ar:'أطقم',en:'Sets',match:/طقم|أطقم|\bset\b/i},
-  {id:'cardigans',ar:'كارديغان',en:'Cardigans',match:/كارديغان|cardigan/i},
-];
-export type CatalogGroup={id:number;ar:string;en:string;count:number;children:{id:string;ar:string;en:string;count:number}[]};
-export const productType=(p:Product)=>productTypes.find(type=>type.match.test(p.ar+' '+p.en));
-export function catalogGroups(categories:{ar:string;en:string}[],products:Product[]):CatalogGroup[]{
-  return categories.slice(1).map((c,i)=>{
-    const items=products.filter(p=>p.cat===i+1);
-    return {...c,id:i+1,count:items.length,children:productTypes.flatMap(type=>{
-      const count=items.filter(p=>productType(p)?.id===type.id).length;
-      return count?[{id:type.id,ar:type.ar,en:type.en,count}]:[];
-    })};
-  });
+export type CategoryRef = {id?: number; ar: string; en: string; parentId?: number | null; level?: number};
+export type CatalogNode = {id: number; ar: string; en: string; count: number; level: number; children: CatalogNode[]};
+export type CatalogGroup = CatalogNode;
+
+export function descendantIds(categories: CategoryRef[], selectedId: number) {
+  const ids = new Set<number>();
+  const walk = (id: number) => {
+    if (!id || ids.has(id)) return;
+    ids.add(id);
+    categories.forEach(category => {
+      if (category.parentId === id && category.id) walk(category.id);
+    });
+  };
+  walk(selectedId);
+  return ids;
 }
-export const catalogHref=(category=0,subcategory='')=>{
-  const params=new URLSearchParams();
-  if(category)params.set('category',String(category));
-  if(subcategory)params.set('subcategory',subcategory);
-  return '#products'+(params.size?'?'+params.toString():'');
-};
-export function readStoreRoute(hash:string,groups:CatalogGroup[]){
-  const [raw,search='']=hash.replace(/^#/,'').split('?');
-  const page=['home','products','cart','portal','admin','confirmation','info','traders','export','contact'].includes(raw)?raw:'home';
-  const params=new URLSearchParams(search);
-  const candidate=Number(params.get('category')||0);
-  const group=groups.find(g=>g.id===candidate);
-  const category=group?candidate:0;
-  const requested=params.get('subcategory')||'';
-  const subcategory=group?.children.some(c=>c.id===requested)?requested:'';
-  return {page,category,subcategory};
+
+export function catalogTree(categories: CategoryRef[], products: Product[]): CatalogNode[] {
+  const countFor = (id: number) => products.filter(product => descendantIds(categories, id).has(categories[product.cat]?.id || 0)).length;
+  const nodes = (parentId: number | null, level: number): CatalogNode[] => categories.flatMap(category => {
+    if (!category.id || (category.parentId ?? null) !== parentId) return [];
+    return [{
+      id: category.id,
+      ar: category.ar,
+      en: category.en,
+      level,
+      count: countFor(category.id),
+      children: level < 3 ? nodes(category.id, level + 1) : [],
+    }];
+  });
+  return nodes(null, 1);
+}
+
+export const catalogHref = (category = 0, _subcategory = '') => category ? `#products?category=${category}` : '#products';
+
+function nodeById(nodes: CatalogNode[], id: number): CatalogNode | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const child = nodeById(node.children, id);
+    if (child) return child;
+  }
+  return undefined;
+}
+
+export function readStoreRoute(hash: string, groups: CatalogNode[]) {
+  const [raw, search = ''] = hash.replace(/^#/, '').split('?');
+  const page = ['home', 'products', 'cart', 'portal', 'admin', 'confirmation', 'info', 'traders', 'export', 'contact'].includes(raw) ? raw : 'home';
+  const params = new URLSearchParams(search);
+  const requested = [params.get('detail'), params.get('subcategory'), params.get('category')]
+    .map(value => Number(value || 0))
+    .find(id => id && nodeById(groups, id));
+  return {page, category: requested || 0, subcategory: ''};
 }

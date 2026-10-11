@@ -447,13 +447,12 @@ def save_category(data, category=None, image=None):
         for field in ("name_ar", "name_en", "image_key"):
             if field in data:
                 setattr(category, field, data[field].strip() if isinstance(data[field], str) else data[field])
+        if "parent_id" in data:
+            category.parent_id = data["parent_id"]
+        if "sort_order" in data:
+            category.sort_order = data["sort_order"]
         if "image_key" in data:
             _reject_blob(category.image_key, "image_key")
-        duplicate = Category.objects.filter(name_ar=category.name_ar)
-        if category.pk:
-            duplicate = duplicate.exclude(pk=category.pk)
-        if category.name_ar and duplicate.exists():
-            raise ValidationError({"name_ar": ["A category with this Arabic name already exists."]})
         if image is not None:
             validate_image_upload(image)
             if category.image:

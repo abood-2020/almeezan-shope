@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from shop.models import Order, OrderLine
+from shop.models import Category, Order, OrderLine
 
 
 def image_value(file_field, image_key):
@@ -110,12 +110,52 @@ def settings_payload(setting):
     return {"company_whatsapp_number": setting.company_whatsapp_number}
 
 
+def category_payloads(categories):
+    parent_of = {category.id: category.parent_id for category in categories}
+    children_of = {}
+    for category in categories:
+        children_of.setdefault(category.parent_id, []).append(category.id)
+    levels = {}
+
+    def level(category_id):
+        if category_id in levels:
+            return levels[category_id]
+        parent_id = parent_of.get(category_id)
+        levels[category_id] = 1 if not parent_id else level(parent_id) + 1
+        return levels[category_id]
+
+    return [
+        {
+            "id": category.id,
+            "name_ar": category.name_ar,
+            "name_en": category.name_en,
+            "image": image_value(category.image, category.image_key),
+            "parent_id": category.parent_id,
+            "level": level(category.id),
+            "sort_order": category.sort_order,
+            "children": children_of.get(category.id, []),
+        }
+        for category in categories
+    ]
+
+
 def category_payload(category):
+    depth = 1
+    current = category.parent_id
+    seen = {category.id}
+    while current and current not in seen:
+        seen.add(current)
+        depth += 1
+        current = Category.objects.filter(pk=current).values_list("parent_id", flat=True).first()
     return {
         "id": category.id,
         "name_ar": category.name_ar,
         "name_en": category.name_en,
         "image": image_value(category.image, category.image_key),
+        "parent_id": category.parent_id,
+        "level": depth,
+        "sort_order": category.sort_order,
+        "children": list(category.children.order_by("sort_order", "id").values_list("id", flat=True)),
     }
 
 

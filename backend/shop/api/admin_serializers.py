@@ -54,10 +54,25 @@ class ProductWriteSerializer(serializers.Serializer):
                 self.fields[name].required = True
 
 
+class ParentIdField(serializers.Field):
+    def to_internal_value(self, data):
+        if data in (None, ""):
+            return None
+        try:
+            category_id = int(data)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError("Choose a valid parent category.")
+        if not Category.objects.filter(pk=category_id).exists():
+            raise serializers.ValidationError("Choose a valid parent category.")
+        return category_id
+
+
 class CategoryWriteSerializer(serializers.Serializer):
     name_ar = serializers.CharField(max_length=120)
     name_en = serializers.CharField(max_length=120)
     image_key = serializers.CharField(required=False, allow_blank=True)
+    parent_id = ParentIdField(required=False, allow_null=True)
+    sort_order = serializers.IntegerField(required=False, min_value=0)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
