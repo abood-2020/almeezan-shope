@@ -11,12 +11,16 @@ from rest_framework.views import APIView
 from shop.api.admin_serializers import (
     CategoryWriteSerializer,
     CurrencyWriteSerializer,
+    DiscountRuleSerializer,
+    ExchangeRateWriteSerializer,
     InvoiceWriteSerializer,
     OrderStatusSerializer,
     PasswordSerializer,
     PriceBulkSerializer,
     PriceListWriteSerializer,
+    PricingModeSerializer,
     ProductWriteSerializer,
+    FaqWriteSerializer,
     SettingsWriteSerializer,
     TraderWriteSerializer,
     admin_invoice_payload,
@@ -24,12 +28,29 @@ from shop.api.admin_serializers import (
     admin_product_payload,
     admin_trader_payload,
     currency_payload,
+    exchange_rate_payload,
     price_list_payload,
 )
 from shop.api.permissions import IsStaffUser
 from shop.api.serializers import LoginSerializer, category_payload, category_payloads, settings_payload
 from shop.api.views import validation_error
-from shop.models import Category, Currency, Invoice, Order, PriceList, Product, ProductColor, ProductImage, Trader
+from shop.content import reorder_faqs, save_faq, update_pages, update_sections
+from shop.exports import export_language, invoice_workbook, order_workbook, xlsx_response
+from shop.models import (
+    Category,
+    Currency,
+    ExchangeRate,
+    FaqItem,
+    Invoice,
+    Order,
+    PriceList,
+    PriceListCategoryRule,
+    PriceListProductRule,
+    Product,
+    ProductColor,
+    ProductImage,
+    Trader,
+)
 from shop.services import (
     add_product_image,
     catalog_products,
@@ -39,9 +60,13 @@ from shop.services import (
     login_staff,
     replace_price_list_prices,
     save_category,
+    save_category_rule,
     save_currency,
+    save_exchange_rate,
     save_invoice,
     save_price_list,
+    save_product_rule,
+    set_pricing_mode,
     save_product,
     save_trader,
     set_color_image,
@@ -239,7 +264,7 @@ class AdminCurrencyDetailView(AdminAPIView):
 
 class AdminPriceListListView(AdminAPIView):
     def get(self, request):
-        lists = PriceList.objects.select_related("currency").prefetch_related("items")
+        lists = PriceList.objects.select_related("currency").prefetch_related("items", "scope_categories", "category_rules", "product_rules")
         return Response([price_list_payload(price_list) for price_list in lists])
 
     def post(self, request):
@@ -252,7 +277,10 @@ class AdminPriceListListView(AdminAPIView):
 
 class AdminPriceListDetailView(AdminAPIView):
     def get(self, request, price_list_id):
-        price_list = get_object_or_404(PriceList.objects.select_related("currency").prefetch_related("items"), pk=price_list_id)
+        price_list = get_object_or_404(
+            PriceList.objects.select_related("currency").prefetch_related("items", "scope_categories", "category_rules", "product_rules"),
+            pk=price_list_id,
+        )
         return Response(price_list_payload(price_list))
 
     def patch(self, request, price_list_id):
@@ -343,22 +371,104 @@ class AdminInvoiceDetailView(AdminAPIView):
 
 class AdminSettingsView(AdminAPIView):
     def get(self, request):
-        return Response(settings_payload(get_site_settings()))
+        response = Response(settings_payload(get_site_settings(), include_inactive_faqs=True))
+        response["Cache-Control"] = "no-store"
+        return response
 
     def patch(self, request):
         serializer = SettingsWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        setting = _saved(update_site_settings, serializer.validated_data["company_whatsapp_number"])
-        return Response(settings_payload(setting))
+        setting = _saved(update_site_settings, serializer.validated_data, request.FILES)
+        response = Response(settings_payload(setting, include_inactive_faqs=True))
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class AdminOrderExcelView(AdminAPIView):
+    def get(self, request, order_number):
+        order = get_object_or_404(
+            Order.objects.select_related("currency", "trader").prefetch_related("lines"),
+            number=order_number,
+        )
+        return xlsx_response(
+            order_workbook(order, export_language(request), get_site_settings()),
+            f"Order_{order.number}.xlsx",
+        )
+
+
+class AdminInvoiceExcelView(AdminAPIView):
+    def get(self, request, invoice_id):
+        invoice = get_object_or_404(Invoice.objects.select_related("trader"), number=invoice_id)
+        return xlsx_response(
+            invoice_workbook(invoice, export_language(request), get_site_settings()),
+            f"Invoice_{invoice.number}.xlsx",
+        )
+
+
+class AdminContentSectionsView(AdminAPIView):
+    def patch(self, request):
+        payload = _saved(update_sections, request.data if isinstance(request.data, list) else request.data.get("sections"))
+        response = Response(payload)
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class AdminContentPagesView(AdminAPIView):
+    def patch(self, request):
+        payload = _saved(update_pages, request.data if isinstance(request.data, list) else request.data.get("pages"))
+        response = Response(payload)
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class AdminFaqListView(AdminAPIView):
+    def post(self, request):
+        serializer = FaqWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        _saved(save_faq, serializer.validated_data, None)
+        response = Response(settings_payload(get_site_settings(), include_inactive_faqs=True), status=201)
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class AdminFaqDetailView(AdminAPIView):
+    def patch(self, request, faq_id):
+        item = get_object_or_404(FaqItem, pk=faq_id)
+        serializer = FaqWriteSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        _saved(save_faq, serializer.validated_data, item)
+        response = Response(settings_payload(get_site_settings(), include_inactive_faqs=True))
+        response["Cache-Control"] = "no-store"
+        return response
+
+    def delete(self, request, faq_id):
+        item = get_object_or_404(FaqItem, pk=faq_id)
+        item.delete()
+        response = Response(settings_payload(get_site_settings(), include_inactive_faqs=True))
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class AdminFaqOrderView(AdminAPIView):
+    def put(self, request):
+        payload = _saved(reorder_faqs, request.data.get("ids"))
+        response = Response(payload)
+        response["Cache-Control"] = "no-store"
+        return response
 
 
 class BulkImportView(AdminAPIView):
     def post(self, request):
         payload = request.data
-        rows = payload if isinstance(payload, list) else payload.get("rows")
+        if isinstance(payload, list):
+            rows = payload
+            lang = "ar"
+        else:
+            rows = payload.get("rows")
+            lang = payload.get("lang", "ar")
         if not isinstance(rows, list):
             raise ValidationError({"rows": ["Expected a list of rows."]})
-        products = _saved(import_products, rows)
+        products = _saved(import_products, rows, lang)
         return Response({"created": len(products), "products": [admin_product_payload(product) for product in products]}, status=201)
 
 
@@ -378,6 +488,114 @@ def _image_payload(image):
         "sort_order": image.sort_order,
         "is_primary": image.is_primary,
     }
+
+
+class AdminPriceListModeView(AdminAPIView):
+    def post(self, request, price_list_id):
+        price_list = get_object_or_404(PriceList.objects.select_related("currency"), pk=price_list_id)
+        serializer = PricingModeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = _saved(
+            set_pricing_mode,
+            price_list,
+            serializer.validated_data["pricing_mode"],
+            serializer.validated_data["confirm"],
+        )
+        if isinstance(result, dict):
+            return Response(result)
+        return Response(price_list_payload(result))
+
+
+class AdminCategoryRuleListView(AdminAPIView):
+    def post(self, request, price_list_id):
+        price_list = get_object_or_404(PriceList, pk=price_list_id)
+        serializer = DiscountRuleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if "category" not in serializer.validated_data:
+            raise ValidationError({"category_id": ["Choose a category."]})
+        if "discount_percent" not in serializer.validated_data:
+            raise ValidationError({"discount_percent": ["Enter a discount percentage."]})
+        rule = _saved(save_category_rule, price_list, serializer.validated_data)
+        return Response(price_list_payload(_price_list(rule.price_list_id)), status=201)
+
+
+class AdminCategoryRuleDetailView(AdminAPIView):
+    def patch(self, request, price_list_id, rule_id):
+        rule = get_object_or_404(PriceListCategoryRule, pk=rule_id, price_list_id=price_list_id)
+        serializer = DiscountRuleSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if "discount_percent" not in data:
+            data["discount_percent"] = rule.discount_percent
+        rule = _saved(save_category_rule, rule.price_list, data, rule)
+        return Response(price_list_payload(_price_list(rule.price_list_id)))
+
+    def delete(self, request, price_list_id, rule_id):
+        rule = get_object_or_404(PriceListCategoryRule, pk=rule_id, price_list_id=price_list_id)
+        rule.delete()
+        return Response(price_list_payload(_price_list(price_list_id)))
+
+
+class AdminProductRuleListView(AdminAPIView):
+    def post(self, request, price_list_id):
+        price_list = get_object_or_404(PriceList, pk=price_list_id)
+        serializer = DiscountRuleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if "product" not in serializer.validated_data:
+            raise ValidationError({"product_id": ["Choose a product."]})
+        if "discount_percent" not in serializer.validated_data:
+            raise ValidationError({"discount_percent": ["Enter a discount percentage."]})
+        rule = _saved(save_product_rule, price_list, serializer.validated_data)
+        return Response(price_list_payload(_price_list(rule.price_list_id)), status=201)
+
+
+class AdminProductRuleDetailView(AdminAPIView):
+    def patch(self, request, price_list_id, rule_id):
+        rule = get_object_or_404(PriceListProductRule, pk=rule_id, price_list_id=price_list_id)
+        serializer = DiscountRuleSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if "discount_percent" not in data:
+            data["discount_percent"] = rule.discount_percent
+        rule = _saved(save_product_rule, rule.price_list, data, rule)
+        return Response(price_list_payload(_price_list(rule.price_list_id)))
+
+    def delete(self, request, price_list_id, rule_id):
+        rule = get_object_or_404(PriceListProductRule, pk=rule_id, price_list_id=price_list_id)
+        rule.delete()
+        return Response(price_list_payload(_price_list(price_list_id)))
+
+
+class AdminExchangeRateListView(AdminAPIView):
+    def get(self, request):
+        rates = ExchangeRate.objects.select_related("source", "target")
+        return Response([exchange_rate_payload(rate) for rate in rates])
+
+    def post(self, request):
+        serializer = ExchangeRateWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        rate = _saved(save_exchange_rate, serializer.validated_data)
+        return Response(exchange_rate_payload(rate), status=201)
+
+
+class AdminExchangeRateDetailView(AdminAPIView):
+    def patch(self, request, rate_id):
+        rate = get_object_or_404(ExchangeRate, pk=rate_id)
+        serializer = ExchangeRateWriteSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        rate = _saved(save_exchange_rate, serializer.validated_data, rate)
+        return Response(exchange_rate_payload(rate))
+
+    def delete(self, request, rate_id):
+        rate = get_object_or_404(ExchangeRate, pk=rate_id)
+        rate.delete()
+        return Response(status=204)
+
+
+def _price_list(price_list_id):
+    return PriceList.objects.select_related("currency").prefetch_related(
+        "items", "category_rules", "product_rules"
+    ).get(pk=price_list_id)
 
 
 def _currency_data(data):

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator, RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 
 HEX_VALIDATOR = RegexValidator(r"^#[0-9A-Fa-f]{6}$", "Enter a HEX color like #22364C.")
@@ -109,6 +109,19 @@ class Product(models.Model):
         decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
     )
+    base_price_usd = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    base_currency = models.ForeignKey(
+        "Currency",
+        on_delete=models.PROTECT,
+        related_name="priced_products",
+        default="ILS",
+    )
     unit_ar = models.CharField(max_length=40)
     unit_en = models.CharField(max_length=40)
     min_qty = models.PositiveIntegerField(validators=[MinValueValidator(1)])
@@ -124,6 +137,10 @@ class Product(models.Model):
         constraints = [
             models.CheckConstraint(check=models.Q(min_qty__gte=1), name="product_min_qty_gte_1"),
             models.CheckConstraint(check=models.Q(base_price_ils__gte=0), name="product_base_price_gte_0"),
+            models.CheckConstraint(
+                check=models.Q(base_price_usd__isnull=True) | models.Q(base_price_usd__gte=0),
+                name="product_usd_base_price_gte_0",
+            ),
         ]
 
     def __str__(self):
@@ -226,6 +243,10 @@ class Currency(models.Model):
     code = models.CharField(max_length=3, primary_key=True, validators=[CURRENCY_CODE_VALIDATOR])
     name = models.CharField(max_length=80)
     symbol = models.CharField(max_length=8)
+    decimal_places = models.PositiveSmallIntegerField(
+        default=2,
+        validators=[MinValueValidator(0), MaxValueValidator(2)],
+    )
 
     class Meta:
         ordering = ["code"]
@@ -243,16 +264,70 @@ class PriceList(models.Model):
     id = models.CharField(max_length=32, primary_key=True)
     name_ar = models.CharField(max_length=120)
     name_en = models.CharField(max_length=120)
+    class PricingMode(models.TextChoices):
+        LEGACY = "legacy", "Legacy fixed prices"
+        RULE_BASED = "rule_based", "Discount rules"
+
+    class DiscountScope(models.TextChoices):
+        ALL = "all", "All products"
+        CATEGORIES = "categories", "Selected categories"
+
     currency = models.ForeignKey(Currency, on_delete=models.PROTECT, related_name="price_lists")
     is_active = models.BooleanField(default=True)
+    pricing_mode = models.CharField(max_length=16, choices=PricingMode.choices, default=PricingMode.LEGACY)
+    default_discount_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    discount_scope = models.CharField(max_length=16, choices=DiscountScope.choices, default=DiscountScope.ALL)
+    scope_categories = models.ManyToManyField(Category, blank=True, related_name="scoped_price_lists")
+    is_default = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["id"]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(default_discount_percent__gte=0) & models.Q(default_discount_percent__lte=100),
+                name="price_list_discount_between_0_and_100",
+            ),
+            models.CheckConstraint(
+                check=models.Q(pricing_mode__in=["legacy", "rule_based"]),
+                name="price_list_pricing_mode_known",
+            ),
+            models.CheckConstraint(
+                check=models.Q(discount_scope__in=["all", "categories"]),
+                name="price_list_discount_scope_known",
+            ),
+            models.UniqueConstraint(
+                fields=["is_default"],
+                condition=models.Q(is_default=True),
+                name="one_default_price_list",
+            ),
+        ]
+
+    def clean(self):
+        if self.default_discount_percent < 0 or self.default_discount_percent > 100:
+            raise ValidationError({"default_discount_percent": "Discount must be between 0 and 100."})
+        if self.pricing_mode == self.PricingMode.RULE_BASED and self.currency_id not in ("ILS", "USD"):
+            raise ValidationError({"currency": "A discount price list uses ILS or USD."})
+        if self.is_default:
+            if self.pricing_mode != self.PricingMode.RULE_BASED:
+                raise ValidationError({"is_default": "The default price list must use discount rules."})
+            if self.default_discount_percent != 0:
+                raise ValidationError({"is_default": "The default price list must use a 0% discount."})
+            if not self.is_active:
+                raise ValidationError({"is_default": "The default price list must stay active."})
 
     def price_for(self, product):
-        """ILS lists fall back to the product base price. Other currencies do not."""
+        """Legacy lists keep stored prices. Rule lists use the shared pricing engine."""
+        if self.pricing_mode == self.PricingMode.RULE_BASED:
+            from shop.pricing import unit_price
+
+            return unit_price(self, product)
         prefetched = getattr(product, "_prefetched_objects_cache", {}).get("price_list_items")
         if prefetched is not None:
             item = next((row for row in prefetched if row.price_list_id == self.id), None)
@@ -260,7 +335,7 @@ class PriceList(models.Model):
             item = self.items.filter(product=product).first()
         if item is not None:
             return item.price
-        if self.currency_id == "ILS":
+        if self.currency_id == "ILS" and getattr(product, "base_currency_id", "ILS") in (None, "ILS"):
             return product.base_price_ils
         return None
 
@@ -286,6 +361,90 @@ class PriceListItem(models.Model):
 
     def __str__(self):
         return f"{self.price_list_id} {self.product.code} {self.price}"
+
+
+class PriceListCategoryRule(models.Model):
+    """Percentage discount for one category inside a rule-based price list."""
+
+    price_list = models.ForeignKey(PriceList, on_delete=models.CASCADE, related_name="category_rules")
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="price_rules")
+    discount_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("100"))],
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["price_list_id", "category_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["price_list", "category"], name="unique_category_rule_per_list"),
+            models.CheckConstraint(
+                check=models.Q(discount_percent__gte=0) & models.Q(discount_percent__lte=100),
+                name="category_rule_discount_between_0_and_100",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.price_list_id} {self.category_id} {self.discount_percent}%"
+
+
+class PriceListProductRule(models.Model):
+    """Percentage discount for one product. It replaces category and default discounts."""
+
+    price_list = models.ForeignKey(PriceList, on_delete=models.CASCADE, related_name="product_rules")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="price_rules")
+    discount_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("100"))],
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["price_list_id", "product_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["price_list", "product"], name="unique_product_rule_per_list"),
+            models.CheckConstraint(
+                check=models.Q(discount_percent__gte=0) & models.Q(discount_percent__lte=100),
+                name="product_rule_discount_between_0_and_100",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.price_list_id} {self.product_id} {self.discount_percent}%"
+
+
+class ExchangeRate(models.Model):
+    """Manual directed rate: 1 source currency unit equals `rate` target currency units."""
+
+    source = models.ForeignKey(Currency, on_delete=models.PROTECT, related_name="rates_from")
+    target = models.ForeignKey(Currency, on_delete=models.PROTECT, related_name="rates_to")
+    rate = models.DecimalField(max_digits=18, decimal_places=8)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["source_id", "target_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["source", "target"], name="unique_directed_exchange_rate"),
+            models.CheckConstraint(check=models.Q(rate__gt=0), name="exchange_rate_positive"),
+            models.CheckConstraint(check=~models.Q(source=models.F("target")), name="exchange_rate_not_same_currency"),
+        ]
+
+    def clean(self):
+        if self.source_id and self.target_id and self.source_id == self.target_id:
+            raise ValidationError({"target": "Choose a different target currency. Same-currency prices need no rate."})
+        if self.rate is None or self.rate <= 0:
+            raise ValidationError({"rate": "Exchange rate must be greater than zero."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"1 {self.source_id} = {self.rate} {self.target_id}"
 
 
 class Trader(models.Model):
@@ -320,6 +479,10 @@ class Order(models.Model):
     currency = models.ForeignKey(Currency, on_delete=models.PROTECT, related_name="orders")
     currency_symbol = models.CharField(max_length=8)
     note = models.TextField(blank=True)
+    price_list_name_ar = models.CharField(max_length=160, blank=True, default="")
+    price_list_name_en = models.CharField(max_length=160, blank=True, default="")
+    trader_name_en = models.CharField(max_length=160, blank=True, default="")
+    trader_email = models.CharField(max_length=254, blank=True, default="")
     total = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -349,12 +512,21 @@ class OrderLine(models.Model):
     product_name_ar = models.CharField(max_length=200)
     product_name_en = models.CharField(max_length=200, blank=True)
     option_label = models.CharField(max_length=200)
+    unit_ar = models.CharField(max_length=40, blank=True, default="")
+    unit_en = models.CharField(max_length=40, blank=True, default="")
+    category_path_ar = models.CharField(max_length=400, blank=True, default="")
+    category_path_en = models.CharField(max_length=400, blank=True, default="")
     quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     unit_price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
     )
+    base_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    base_currency = models.CharField(max_length=3, blank=True, default="")
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    exchange_rate = models.DecimalField(max_digits=18, decimal_places=8, null=True, blank=True)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
     class Meta:
         ordering = ["id"]
@@ -395,6 +567,48 @@ class Invoice(models.Model):
 
 class SiteSetting(models.Model):
     company_whatsapp_number = models.CharField(max_length=20, blank=True, default="")
+    name_ar = models.CharField(max_length=80, default="رِواق")
+    name_en = models.CharField(max_length=80, default="Riwaq")
+    tagline_ar = models.CharField(max_length=160, default="مساحة واحدة. فرص تجارية أوسع.")
+    tagline_en = models.CharField(max_length=160, default="One place. A world of business possibilities.")
+    header_caption_ar = models.CharField(max_length=80, default="تجارة الجملة")
+    header_caption_en = models.CharField(max_length=80, default="RIWAQ · WHOLESALE")
+    logo = models.FileField(upload_to="brand/", blank=True)
+    logo_alt_ar = models.CharField(max_length=120, blank=True, default="")
+    logo_alt_en = models.CharField(max_length=120, blank=True, default="")
+    favicon = models.FileField(upload_to="brand/", blank=True)
+    phone = models.CharField(max_length=20, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    address_ar = models.CharField(max_length=240, blank=True, default="")
+    address_en = models.CharField(max_length=240, blank=True, default="")
+    instagram_url = models.URLField(blank=True, default="")
+    facebook_url = models.URLField(blank=True, default="")
+    seo_title_ar = models.CharField(max_length=120, default="رِواق | أزياء الجملة للتجار")
+    seo_title_en = models.CharField(max_length=120, default="Riwaq | Wholesale fashion for traders")
+    seo_description_ar = models.TextField(
+        blank=True,
+        default="اكتشف تشكيلة رِواق للملابس بالجملة، راجع الألوان والمقاسات وأرسل طلبك التجاري.",
+    )
+    seo_description_en = models.TextField(
+        blank=True,
+        default="Explore Riwaq wholesale fashion, review colors and sizes, and send your trade request.",
+    )
+    og_image = models.FileField(upload_to="brand/", blank=True)
+    hero_video = models.FileField(upload_to="brand/video/", blank=True)
+    hero_video_url = models.URLField(blank=True, default="")
+    hero_poster = models.FileField(upload_to="brand/", blank=True)
+    footer_explore_ar = models.CharField(max_length=80, default="اكتشف رِواق")
+    footer_explore_en = models.CharField(max_length=80, default="Explore Riwaq")
+    footer_account_ar = models.CharField(max_length=80, default="حسابك وطلباتك")
+    footer_account_en = models.CharField(max_length=80, default="Your account & orders")
+    copyright_ar = models.CharField(max_length=80, default="رِواق للتجارة")
+    copyright_en = models.CharField(max_length=80, default="Riwaq Trade")
+    footer_note_ar = models.CharField(max_length=80, default="مصمم لتجارة أبسط")
+    footer_note_en = models.CharField(max_length=80, default="Made for simpler business")
+    footer_place_ar = models.CharField(max_length=80, default="فلسطين · العالم")
+    footer_place_en = models.CharField(max_length=80, default="Palestine · Worldwide")
+    nav_labels = models.JSONField(default=dict, blank=True)
+    content_initialized = models.BooleanField(default=False)
 
     class Meta:
         verbose_name = "site setting"
@@ -404,12 +618,9 @@ class SiteSetting(models.Model):
         ]
 
     def clean(self):
-        digits = re.sub(r"\D", "", self.company_whatsapp_number or "")
-        if digits and not 8 <= len(digits) <= 15:
-            raise ValidationError(
-                {"company_whatsapp_number": "Use 8 to 15 digits, or leave the number empty."}
-            )
-        self.company_whatsapp_number = digits
+        from shop.content import clean_site_setting
+
+        clean_site_setting(self)
 
     def save(self, *args, **kwargs):
         self.pk = 1
@@ -424,3 +635,112 @@ class SiteSetting(models.Model):
 
     def __str__(self):
         return "Site settings"
+
+
+class HomepageSection(models.Model):
+    key = models.CharField(max_length=32, unique=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_visible = models.BooleanField(default=True)
+    eyebrow_ar = models.CharField(max_length=120, blank=True, default="")
+    eyebrow_en = models.CharField(max_length=120, blank=True, default="")
+    title_ar = models.CharField(max_length=200, blank=True, default="")
+    title_en = models.CharField(max_length=200, blank=True, default="")
+    body_ar = models.TextField(blank=True, default="")
+    body_en = models.TextField(blank=True, default="")
+    cta_ar = models.CharField(max_length=80, blank=True, default="")
+    cta_en = models.CharField(max_length=80, blank=True, default="")
+    cta_target = models.CharField(max_length=32, blank=True, default="")
+    secondary_cta_ar = models.CharField(max_length=80, blank=True, default="")
+    secondary_cta_en = models.CharField(max_length=80, blank=True, default="")
+    secondary_cta_target = models.CharField(max_length=32, blank=True, default="")
+    aside_title_ar = models.CharField(max_length=200, blank=True, default="")
+    aside_title_en = models.CharField(max_length=200, blank=True, default="")
+    aside_body_ar = models.TextField(blank=True, default="")
+    aside_body_en = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self):
+        return self.key
+
+
+class HomepageBlock(models.Model):
+    section = models.ForeignKey(HomepageSection, on_delete=models.CASCADE, related_name="blocks")
+    key = models.CharField(max_length=40)
+    sort_order = models.PositiveIntegerField(default=0)
+    title_ar = models.CharField(max_length=200, blank=True, default="")
+    title_en = models.CharField(max_length=200, blank=True, default="")
+    body_ar = models.CharField(max_length=400, blank=True, default="")
+    body_en = models.CharField(max_length=400, blank=True, default="")
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["section", "key"], name="unique_homepage_block_key"),
+        ]
+
+    def __str__(self):
+        return f"{self.section.key}:{self.key}"
+
+
+class ContentPage(models.Model):
+    key = models.CharField(max_length=32, unique=True)
+    eyebrow_ar = models.CharField(max_length=120, blank=True, default="")
+    eyebrow_en = models.CharField(max_length=120, blank=True, default="")
+    title_ar = models.CharField(max_length=200, blank=True, default="")
+    title_en = models.CharField(max_length=200, blank=True, default="")
+    body_ar = models.TextField(blank=True, default="")
+    body_en = models.TextField(blank=True, default="")
+    intro_title_ar = models.CharField(max_length=200, blank=True, default="")
+    intro_title_en = models.CharField(max_length=200, blank=True, default="")
+    intro_body_ar = models.TextField(blank=True, default="")
+    intro_body_en = models.TextField(blank=True, default="")
+    cta_ar = models.CharField(max_length=80, blank=True, default="")
+    cta_en = models.CharField(max_length=80, blank=True, default="")
+    faq_eyebrow_ar = models.CharField(max_length=120, blank=True, default="")
+    faq_eyebrow_en = models.CharField(max_length=120, blank=True, default="")
+    faq_title_ar = models.CharField(max_length=200, blank=True, default="")
+    faq_title_en = models.CharField(max_length=200, blank=True, default="")
+    faq_intro_ar = models.CharField(max_length=300, blank=True, default="")
+    faq_intro_en = models.CharField(max_length=300, blank=True, default="")
+
+    class Meta:
+        ordering = ["key"]
+
+    def __str__(self):
+        return self.key
+
+
+class ContentBlock(models.Model):
+    page = models.ForeignKey(ContentPage, on_delete=models.CASCADE, related_name="blocks")
+    key = models.CharField(max_length=40)
+    sort_order = models.PositiveIntegerField(default=0)
+    title_ar = models.CharField(max_length=200, blank=True, default="")
+    title_en = models.CharField(max_length=200, blank=True, default="")
+    body_ar = models.CharField(max_length=400, blank=True, default="")
+    body_en = models.CharField(max_length=400, blank=True, default="")
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["page", "key"], name="unique_content_block_key"),
+        ]
+
+    def __str__(self):
+        return f"{self.page.key}:{self.key}"
+
+
+class FaqItem(models.Model):
+    question_ar = models.CharField(max_length=240)
+    question_en = models.CharField(max_length=240)
+    answer_ar = models.TextField()
+    answer_en = models.TextField()
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self):
+        return self.question_en

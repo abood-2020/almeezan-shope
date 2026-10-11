@@ -24,10 +24,14 @@ class OrderItemInputSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
     option = serializers.CharField()
     qty = serializers.IntegerField(min_value=1)
+    expected_unit_price = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, allow_null=True
+    )
 
 
 class OrderCreateSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True, default="")
+    acknowledge_price_changes = serializers.BooleanField(required=False, default=False)
     items = serializers.ListField(child=OrderItemInputSerializer(), allow_empty=False)
 
 
@@ -40,12 +44,31 @@ class OrderLineSerializer(serializers.ModelSerializer):
     qty = serializers.IntegerField(source="quantity")
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     line_total = serializers.SerializerMethodField()
+    base_price = serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True)
+    base_currency = serializers.CharField()
+    discount_percent = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    exchange_rate = serializers.DecimalField(max_digits=18, decimal_places=8, allow_null=True)
 
     class Meta:
         model = OrderLine
-        fields = ["product_id", "code", "name_ar", "name_en", "option", "qty", "unit_price", "line_total"]
+        fields = [
+            "product_id",
+            "code",
+            "name_ar",
+            "name_en",
+            "option",
+            "qty",
+            "unit_price",
+            "line_total",
+            "base_price",
+            "base_currency",
+            "discount_percent",
+            "exchange_rate",
+        ]
 
     def get_line_total(self, line):
+        if line.line_total is not None:
+            return money(line.line_total)
         return money(line.unit_price * line.quantity)
 
 
@@ -106,8 +129,11 @@ def invoice_payload(invoice):
     }
 
 
-def settings_payload(setting):
-    return {"company_whatsapp_number": setting.company_whatsapp_number}
+def settings_payload(setting, include_inactive_faqs=False):
+    from shop.content import content_payload
+
+    del setting
+    return content_payload(include_inactive_faqs=include_inactive_faqs)
 
 
 def category_payloads(categories):
@@ -159,7 +185,7 @@ def category_payload(category):
     }
 
 
-def product_payload(product, price_list=None):
+def product_payload(product, price_list=None, quote=None):
     images = list(product.images.all())
     primary = next((image for image in images if image.is_primary), None)
     if primary is None and images:
@@ -193,7 +219,13 @@ def product_payload(product, price_list=None):
         "unavailable_variants": [option.label for option in product.options.all() if not option.is_available],
     }
     if price_list is not None:
-        data["price"] = money(price_list.price_for(product))
+        if quote is None:
+            from shop.pricing import quote_many
+
+            quote = quote_many(price_list, [product])[product.id]
+        data["price"] = money(quote.unit_price) if quote.available else None
         data["currency_code"] = price_list.currency_id
         data["currency_symbol"] = price_list.currency.symbol
+        if not quote.available:
+            data["price_error"] = quote.error or "missing_price"
     return data

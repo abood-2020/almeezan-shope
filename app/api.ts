@@ -51,6 +51,22 @@ export function resolveMedia(value: string) {
   return value;
 }
 
+export async function downloadAuthorized(path: string, fallbackName: string) {
+  const response = await fetch(`${API_BASE}${path}`, {credentials: "include"});
+  if (!response.ok) throw new Error("export");
+  const blob = await response.blob();
+  const match = (response.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+  const name = match?.[1] || fallbackName;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export async function fileFromBlob(url: string, name: string) {
   const blob = await fetch(url).then(response => response.blob());
   const type = blob.type || "image/png";

@@ -3,7 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from shop.api.serializers import image_value, invoice_payload, money, product_payload, trader_payload
-from shop.models import Category, Currency, PriceList, Trader
+from shop.models import Category, Currency, PriceList, Product, Trader
 
 
 class ColorWriteSerializer(serializers.Serializer):
@@ -22,6 +22,12 @@ class ProductWriteSerializer(serializers.Serializer):
     )
     base_price_ils = serializers.DecimalField(
         max_digits=10, decimal_places=2, min_value=Decimal("0"), required=False
+    )
+    base_price_usd = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=Decimal("0"), required=False, allow_null=True
+    )
+    base_currency_code = serializers.PrimaryKeyRelatedField(
+        queryset=Currency.objects.all(), source="base_currency", required=False
     )
     unit_ar = serializers.CharField(max_length=40, required=False)
     unit_en = serializers.CharField(max_length=40, required=False)
@@ -125,6 +131,22 @@ class PriceListWriteSerializer(serializers.Serializer):
     name_en = serializers.CharField(max_length=120, required=False)
     currency_code = serializers.CharField(max_length=3, required=False)
     is_active = serializers.BooleanField(required=False)
+    pricing_mode = serializers.ChoiceField(choices=["legacy", "rule_based"], required=False)
+    default_discount_percent = serializers.DecimalField(
+        max_digits=5, decimal_places=2, min_value=Decimal("0"), max_value=Decimal("100"), required=False
+    )
+    is_default = serializers.BooleanField(required=False)
+    discount_scope = serializers.ChoiceField(choices=["all", "categories"], required=False)
+    scope_category_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(), source="scope_categories", many=True, required=False
+    )
+
+    def validate(self, attrs):
+        if self.partial and "pricing_mode" in self.initial_data:
+            raise serializers.ValidationError({
+                "pricing_mode": "Confirm the pricing mode change before it is applied.",
+            })
+        return attrs
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -149,6 +171,33 @@ class PriceBulkSerializer(serializers.Serializer):
     prices = PriceRowSerializer(many=True)
 
 
+class PricingModeSerializer(serializers.Serializer):
+    pricing_mode = serializers.ChoiceField(choices=["legacy", "rule_based"])
+    confirm = serializers.BooleanField(required=False, default=False)
+
+
+class DiscountRuleSerializer(serializers.Serializer):
+    category_id = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all(), source="category", required=False)
+    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), source="product", required=False)
+    discount_percent = serializers.DecimalField(
+        max_digits=5, decimal_places=2, min_value=Decimal("0"), max_value=Decimal("100"), required=False
+    )
+    is_active = serializers.BooleanField(required=False)
+
+
+class ExchangeRateWriteSerializer(serializers.Serializer):
+    source = serializers.PrimaryKeyRelatedField(queryset=Currency.objects.all(), required=False)
+    target = serializers.PrimaryKeyRelatedField(queryset=Currency.objects.all(), required=False)
+    rate = serializers.DecimalField(max_digits=18, decimal_places=8, required=False)
+    is_active = serializers.BooleanField(required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.partial:
+            for name in ("source", "target", "rate"):
+                self.fields[name].required = True
+
+
 class OrderStatusSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=["review", "confirmed", "complete", "cancelled"])
 
@@ -167,12 +216,53 @@ class InvoiceWriteSerializer(serializers.Serializer):
 
 
 class SettingsWriteSerializer(serializers.Serializer):
-    company_whatsapp_number = serializers.CharField(allow_blank=True)
+    company_whatsapp_number = serializers.CharField(allow_blank=True, required=False, max_length=20)
+    name_ar = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    name_en = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    tagline_ar = serializers.CharField(required=False, allow_blank=True, max_length=160)
+    tagline_en = serializers.CharField(required=False, allow_blank=True, max_length=160)
+    header_caption_ar = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    header_caption_en = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    logo_alt_ar = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    logo_alt_en = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    phone = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    email = serializers.CharField(required=False, allow_blank=True, max_length=254)
+    address_ar = serializers.CharField(required=False, allow_blank=True, max_length=240)
+    address_en = serializers.CharField(required=False, allow_blank=True, max_length=240)
+    instagram_url = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    facebook_url = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    seo_title_ar = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    seo_title_en = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    seo_description_ar = serializers.CharField(required=False, allow_blank=True)
+    seo_description_en = serializers.CharField(required=False, allow_blank=True)
+    hero_video_url = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    footer_explore_ar = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    footer_explore_en = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    footer_account_ar = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    footer_account_en = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    copyright_ar = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    copyright_en = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    footer_note_ar = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    footer_note_en = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    footer_place_ar = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    footer_place_en = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    nav_labels = serializers.DictField(child=serializers.CharField(allow_blank=True, max_length=80), required=False)
+
+
+class FaqWriteSerializer(serializers.Serializer):
+    question_ar = serializers.CharField(required=False, allow_blank=True, max_length=240)
+    question_en = serializers.CharField(required=False, allow_blank=True, max_length=240)
+    answer_ar = serializers.CharField(required=False, allow_blank=True)
+    answer_en = serializers.CharField(required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False)
+    sort_order = serializers.IntegerField(required=False, min_value=0)
 
 
 def admin_product_payload(product):
     data = product_payload(product)
     data["base_price_ils"] = money(product.base_price_ils)
+    data["base_price_usd"] = money(product.base_price_usd)
+    data["base_currency"] = product.base_currency_id
     data["images"] = [
         {
             "id": image.id,
@@ -201,10 +291,17 @@ def currency_payload(currency):
 
 
 def price_list_payload(price_list):
-    from shop.models import Product
+    from shop.pricing import quote_many
 
     explicit = {item.product_id: item.price for item in price_list.items.all()}
-    required = set(Product.objects.values_list("id", flat=True))
+    products = list(Product.objects.select_related("category", "base_currency").order_by("id"))
+    required = {product.id for product in products}
+    rule_based = price_list.pricing_mode == "rule_based"
+    quotes = quote_many(price_list, products) if rule_based else {}
+    if rule_based:
+        complete = bool(products) and all(quote.available for quote in quotes.values())
+    else:
+        complete = price_list.currency_id == "ILS" or set(explicit) == required
     return {
         "id": price_list.id,
         "name_ar": price_list.name_ar,
@@ -212,11 +309,63 @@ def price_list_payload(price_list):
         "currency_code": price_list.currency_id,
         "currency_symbol": price_list.currency.symbol,
         "is_active": price_list.is_active,
-        "complete": price_list.currency_id == "ILS" or set(explicit) == required,
+        "pricing_mode": price_list.pricing_mode,
+        "default_discount_percent": f"{price_list.default_discount_percent:.2f}",
+        "discount_scope": price_list.discount_scope,
+        "scope_category_ids": [category.id for category in price_list.scope_categories.all()],
+        "is_default": price_list.is_default,
+        "complete": complete,
         "prices": [
             {"product_id": product_id, "price": money(price)}
             for product_id, price in sorted(explicit.items())
         ],
+        "category_rules": [
+            {
+                "id": rule.id,
+                "category_id": rule.category_id,
+                "discount_percent": f"{rule.discount_percent:.2f}",
+                "is_active": rule.is_active,
+            }
+            for rule in price_list.category_rules.all()
+        ],
+        "product_rules": [
+            {
+                "id": rule.id,
+                "product_id": rule.product_id,
+                "discount_percent": f"{rule.discount_percent:.2f}",
+                "is_active": rule.is_active,
+            }
+            for rule in price_list.product_rules.all()
+        ],
+        "quotes": [
+            {
+                "product_id": product.id,
+                "base_price": money(quotes[product.id].base_price),
+                "base_currency": quotes[product.id].base_currency,
+                "exchange_rate": None,
+                "discount_percent": None if quotes[product.id].discount_percent is None else f"{quotes[product.id].discount_percent:.2f}",
+                "rule_source": quotes[product.id].source,
+                "category_id": quotes[product.id].category_id,
+                "calculated_price": money(quotes[product.id].calculated),
+                "overridden": quotes[product.id].overridden,
+                "price": money(quotes[product.id].unit_price) if quotes[product.id].available else None,
+                "currency_code": price_list.currency_id,
+                "available": quotes[product.id].available,
+                "error": quotes[product.id].error,
+            }
+            for product in products
+        ] if rule_based else [],
+    }
+
+
+def exchange_rate_payload(rate):
+    return {
+        "id": rate.id,
+        "source": rate.source_id,
+        "target": rate.target_id,
+        "rate": f"{rate.rate:.8f}",
+        "is_active": rate.is_active,
+        "updated_at": rate.updated_at.isoformat(),
     }
 
 

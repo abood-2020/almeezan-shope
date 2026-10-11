@@ -6,13 +6,19 @@ from .models import (
     Invoice,
     Order,
     OrderLine,
+    ExchangeRate,
     PriceList,
+    PriceListCategoryRule,
     PriceListItem,
+    PriceListProductRule,
     Product,
     ProductColor,
     ProductImage,
     ProductOption,
     ProductSize,
+    ContentPage,
+    FaqItem,
+    HomepageSection,
     SiteSetting,
     Trader,
 )
@@ -58,7 +64,7 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ("code", "name_en", "category", "base_price_ils", "min_qty", "available")
+    list_display = ("code", "name_en", "category", "base_price_ils", "base_price_usd", "min_qty", "available")
     search_fields = ("code", "name_ar", "name_en")
     list_filter = ("available", "category")
     ordering = ("id",)
@@ -67,17 +73,36 @@ class ProductAdmin(admin.ModelAdmin):
 
 @admin.register(Currency)
 class CurrencyAdmin(admin.ModelAdmin):
-    list_display = ("code", "name", "symbol")
+    list_display = ("code", "name", "symbol", "decimal_places")
     search_fields = ("code", "name")
     ordering = ("code",)
 
 
 @admin.register(PriceList)
 class PriceListAdmin(admin.ModelAdmin):
-    list_display = ("id", "name_en", "currency", "is_active")
+    list_display = ("id", "name_en", "currency", "pricing_mode", "default_discount_percent", "discount_scope", "is_default", "is_active")
+    filter_horizontal = ("scope_categories",)
     search_fields = ("id", "name_ar", "name_en")
     list_filter = ("currency", "is_active")
     inlines = [PriceListItemInline]
+
+
+@admin.register(PriceListCategoryRule)
+class PriceListCategoryRuleAdmin(admin.ModelAdmin):
+    list_display = ("price_list", "category", "discount_percent", "is_active")
+    list_filter = ("price_list", "is_active")
+
+
+@admin.register(PriceListProductRule)
+class PriceListProductRuleAdmin(admin.ModelAdmin):
+    list_display = ("price_list", "product", "discount_percent", "is_active")
+    list_filter = ("price_list", "is_active")
+
+
+@admin.register(ExchangeRate)
+class ExchangeRateAdmin(admin.ModelAdmin):
+    list_display = ("source", "target", "rate", "is_active", "updated_at")
+    list_filter = ("is_active", "source", "target")
 
 
 @admin.register(Trader)
@@ -112,7 +137,23 @@ class InvoiceAdmin(admin.ModelAdmin):
 
 @admin.register(SiteSetting)
 class SiteSettingAdmin(admin.ModelAdmin):
-    list_display = ("company_whatsapp_number",)
+    list_display = ("name_en", "company_whatsapp_number", "email")
+
+
+@admin.register(HomepageSection)
+class HomepageSectionAdmin(admin.ModelAdmin):
+    list_display = ("key", "is_visible", "sort_order")
+
+
+@admin.register(ContentPage)
+class ContentPageAdmin(admin.ModelAdmin):
+    list_display = ("key", "title_en")
+
+
+@admin.register(FaqItem)
+class FaqItemAdmin(admin.ModelAdmin):
+    list_display = ("question_en", "sort_order", "is_active")
+    list_filter = ("is_active",)
 
     def has_add_permission(self, request):
         return not SiteSetting.objects.exists()

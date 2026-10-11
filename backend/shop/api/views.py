@@ -20,7 +20,9 @@ from shop.api.serializers import (
     settings_payload,
     trader_payload,
 )
+from shop.exports import export_language, invoice_workbook, order_workbook, xlsx_response
 from shop.models import Category, Invoice, Order, category_descendant_ids
+from shop.pricing import PriceChangeRequired, quote_many
 from shop.services import catalog_products, create_order, get_active_trader, get_site_settings, login_trader
 
 
@@ -83,7 +85,7 @@ class ProductListView(APIView):
     def get(self, request):
         trader = get_active_trader(request.user)
         price_list = trader.price_list if trader else None
-        products = catalog_products(trader)
+        products = list(catalog_products(trader))
         selected = request.query_params.get("category")
         if selected not in (None, ""):
             try:
@@ -92,8 +94,13 @@ class ProductListView(APIView):
                 return Response({"detail": "Invalid category."}, status=400)
             if not Category.objects.filter(pk=category_id).exists():
                 return Response({"detail": "Not found."}, status=404)
-            products = products.filter(category_id__in=category_descendant_ids(category_id))
-        return Response([product_payload(product, price_list) for product in products])
+            allowed = set(category_descendant_ids(category_id))
+            products = [product for product in products if product.category_id in allowed]
+        quotes = quote_many(price_list, products) if price_list is not None else {}
+        return Response([
+            product_payload(product, price_list, quotes.get(product.id))
+            for product in products
+        ])
 
 
 class ProductDetailView(APIView):
@@ -114,15 +121,28 @@ class CurrentPricingView(APIView):
     def get(self, request):
         trader = get_active_trader(request.user)
         price_list = trader.price_list
+        products = list(catalog_products(trader))
+        quotes = quote_many(price_list, products)
         return Response({
             "id": price_list.id,
             "name_ar": price_list.name_ar,
             "name_en": price_list.name_en,
             "currency_code": price_list.currency_id,
             "currency_symbol": price_list.currency.symbol,
+            "pricing_mode": price_list.pricing_mode,
+            "default_discount_percent": f"{price_list.default_discount_percent:.2f}",
             "prices": [
-                {"product_id": product.id, "price": money(price_list.price_for(product))}
-                for product in catalog_products(trader)
+                {
+                    "product_id": product.id,
+                    "price": money(quotes[product.id].unit_price) if quotes[product.id].available else None,
+                    "base_price": money(quotes[product.id].base_price),
+                    "base_currency": quotes[product.id].base_currency,
+                    "discount_percent": None if quotes[product.id].discount_percent is None else f"{quotes[product.id].discount_percent:.2f}",
+                    "exchange_rate": None if quotes[product.id].exchange_rate is None else f"{quotes[product.id].exchange_rate:.8f}",
+                    "rule_source": quotes[product.id].source,
+                    "error": quotes[product.id].error,
+                }
+                for product in products
             ],
         })
 
@@ -144,7 +164,10 @@ class OrderListCreateView(APIView):
                 trader,
                 serializer.validated_data.get("note", ""),
                 serializer.validated_data["items"],
+                serializer.validated_data.get("acknowledge_price_changes", False),
             )
+        except PriceChangeRequired as exc:
+            return Response({"price_changed": True, "items": exc.items}, status=409)
         except DjangoValidationError as exc:
             validation_error(exc)
         return Response(OrderSerializer(order).data, status=201)
@@ -190,4 +213,33 @@ class PublicSettingsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response(settings_payload(get_site_settings()))
+        response = Response(settings_payload(get_site_settings()))
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class OrderExcelView(APIView):
+    permission_classes = [IsActiveTrader]
+
+    def get(self, request, order_number):
+        trader = get_active_trader(request.user)
+        order = (
+            Order.objects.filter(trader=trader, number=order_number)
+            .prefetch_related("lines")
+            .select_related("currency", "trader")
+            .first()
+        )
+        if order is None:
+            return Response({"detail": "Not found."}, status=404)
+        return xlsx_response(order_workbook(order, export_language(request), get_site_settings()), f"Order_{order.number}.xlsx")
+
+
+class InvoiceExcelView(APIView):
+    permission_classes = [IsActiveTrader]
+
+    def get(self, request, invoice_id):
+        trader = get_active_trader(request.user)
+        invoice = Invoice.objects.filter(trader=trader, number=invoice_id).select_related("trader").first()
+        if invoice is None:
+            return Response({"detail": "Not found."}, status=404)
+        return xlsx_response(invoice_workbook(invoice, export_language(request), get_site_settings()), f"Invoice_{invoice.number}.xlsx")

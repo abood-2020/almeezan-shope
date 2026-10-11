@@ -1,5 +1,7 @@
 import {initialProducts, type Product} from './data';
-export type PriceList={id:string;ar:string;en:string;currency:string;prices:Record<number,number>};
+export type PriceRule={id:number;discount:string;active:boolean;categoryId?:number;productId?:number};
+export type PriceQuote={productId:number;basePrice:string|null;baseCurrency:string;discount:string|null;source:string;categoryId:number|null;price:string|null;calculated:string|null;overridden:boolean;currency:string;available:boolean;error:string};
+export type PriceList={id:string;ar:string;en:string;currency:string;prices:Record<number,number>;mode?:'legacy'|'rule_based';defaultDiscount?:string;discountScope?:'all'|'categories';scopeCategoryIds?:number[];isDefault?:boolean;active?:boolean;categoryRules?:PriceRule[];productRules?:PriceRule[];quotes?:PriceQuote[]};
 export type PriceDraft={currency:string;values:Record<number,string>};
 export const baseCurrency='ILS';
 export const initialPriceLists:PriceList[]=[
@@ -8,6 +10,10 @@ export const initialPriceLists:PriceList[]=[
 ];
 // An absent price never converts a base amount into another currency.
 export function effectivePrice(product:Product,list:PriceList):number{
+  if(list.mode==='rule_based'&&list.quotes?.length){
+    const quote=list.quotes.find(row=>row.productId===product.id);
+    return quote?.available&&quote.price!=null?Number(quote.price):NaN;
+  }
   const assigned=list.prices[product.id];
   return Number.isFinite(assigned)?assigned:list.currency===baseCurrency?product.price:NaN;
 }

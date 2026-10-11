@@ -26,6 +26,7 @@ export type ApiProduct = {
   unavailable_variants: string[];
   price?: string | null;
   base_price_ils?: string;
+  base_price_usd?: string | null;
   images?: ApiImage[];
 };
 export type ApiTrader = {
@@ -54,7 +55,16 @@ export type ApiPriceList = {
   name_en: string;
   currency_code: string;
   currency_symbol: string;
+  pricing_mode?: "legacy" | "rule_based";
+  default_discount_percent?: string;
+  discount_scope?: "all" | "categories";
+  scope_category_ids?: number[];
+  is_default?: boolean;
+  is_active?: boolean;
   prices: {product_id: number; price: string | null}[];
+  category_rules?: {id: number; category_id: number; discount_percent: string; is_active: boolean}[];
+  product_rules?: {id: number; product_id: number; discount_percent: string; is_active: boolean}[];
+  quotes?: {product_id: number; base_price: string | null; base_currency: string; exchange_rate?: string | null; discount_percent: string | null; rule_source: string; category_id: number | null; calculated_price?: string | null; overridden?: boolean; price: string | null; currency_code: string; available: boolean; error: string}[];
 };
 export type ApiCurrency = {code: string; name: string; symbol: string};
 export type UiCategory = {id?: number; ar: string; en: string; img?: string; parentId?: number | null; level?: number};
@@ -98,6 +108,7 @@ export function productFromApi(row: ApiProduct, categories: UiCategory[], useBas
     code: row.code,
     cat: categoryIndex > 0 ? categoryIndex : 1,
     price: source == null || source === "" ? Number.NaN : Number(source),
+    usdPrice: row.base_price_usd == null || row.base_price_usd === "" ? null : Number(row.base_price_usd),
     unit: row.unit_ar,
     unitEn: row.unit_en,
     min: row.min_qty,
@@ -151,6 +162,28 @@ export function priceListFromApi(row: ApiPriceList): PriceList {
     en: row.name_en,
     currency: row.currency_code,
     prices: Object.fromEntries(row.prices.filter(item => item.price != null).map(item => [item.product_id, Number(item.price)])),
+    mode: row.pricing_mode || "legacy",
+    defaultDiscount: row.default_discount_percent || "0.00",
+    discountScope: row.discount_scope || "all",
+    scopeCategoryIds: row.scope_category_ids || [],
+    isDefault: !!row.is_default,
+    active: row.is_active !== false,
+    categoryRules: (row.category_rules || []).map(rule => ({id: rule.id, categoryId: rule.category_id, discount: rule.discount_percent, active: rule.is_active})),
+    productRules: (row.product_rules || []).map(rule => ({id: rule.id, productId: rule.product_id, discount: rule.discount_percent, active: rule.is_active})),
+    quotes: (row.quotes || []).map(quote => ({
+      productId: quote.product_id,
+      basePrice: quote.base_price,
+      baseCurrency: quote.base_currency,
+      discount: quote.discount_percent,
+      source: quote.rule_source,
+      categoryId: quote.category_id,
+      price: quote.price,
+      calculated: quote.calculated_price ?? null,
+      overridden: !!quote.overridden,
+      currency: quote.currency_code,
+      available: quote.available,
+      error: quote.error,
+    })),
   };
 }
 
@@ -196,6 +229,7 @@ export function productWriteBody(product: Product, categoryId: number) {
     code: product.code,
     category_id: categoryId,
     base_price_ils: Number.isFinite(product.price) ? product.price.toFixed(2) : "0.00",
+    base_price_usd: product.usdPrice == null || !Number.isFinite(product.usdPrice) ? null : product.usdPrice.toFixed(2),
     unit_ar: product.unit,
     unit_en: product.unitEn,
     min_qty: product.min,

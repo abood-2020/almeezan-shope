@@ -12,11 +12,14 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from shop.models import (
     Category,
     Currency,
+    ExchangeRate,
     Invoice,
     Order,
     OrderLine,
     PriceList,
+    PriceListCategoryRule,
     PriceListItem,
+    PriceListProductRule,
     Product,
     ProductColor,
     ProductImage,
@@ -25,6 +28,7 @@ from shop.models import (
     SiteSetting,
     Trader,
 )
+from shop.pricing import PriceChangeRequired, compare_expected_price, parse_discount, quantize_money, quote_many
 
 
 def get_active_trader(user):
@@ -80,13 +84,14 @@ def _line_error(index, message):
     raise ValidationError({"items": [f"Item {index + 1}: {message}"]})
 
 
-def prepare_order_lines(trader, items):
+def prepare_order_lines(trader, items, acknowledge_price_changes=False):
     if not items:
         raise ValidationError({"items": ["Add at least one product."]})
-    prepared = []
+    products = []
+    resolved = []
     for index, item in enumerate(items):
         try:
-            product = Product.objects.get(pk=item["product_id"])
+            product = Product.objects.select_related("base_currency", "category").get(pk=item["product_id"])
         except Product.DoesNotExist:
             _line_error(index, "Unknown product.")
         if not product.available:
@@ -101,10 +106,29 @@ def prepare_order_lines(trader, items):
             _line_error(index, "Quantity must be a positive integer.")
         if quantity < product.min_qty:
             _line_error(index, f"Minimum quantity is {product.min_qty}.")
-        unit_price = trader.price_list.price_for(product)
-        if unit_price is None:
+        products.append(product)
+        resolved.append((index, item, product, option.label, quantity))
+    quotes = quote_many(trader.price_list, products)
+    prepared = []
+    changes = []
+    for index, item, product, label, quantity in resolved:
+        quote = quotes[product.id]
+        if not quote.available or quote.unit_price is None:
+            if quote.error == "missing_exchange_rate":
+                _line_error(index, "No exchange rate is available for this product.")
             _line_error(index, "No price is set for this product on your price list.")
-        prepared.append((product, option.label, quantity, unit_price))
+        expected = item.get("expected_unit_price")
+        if not acknowledge_price_changes and not compare_expected_price(expected, quote):
+            changes.append({
+                "product_id": product.id,
+                "option": label,
+                "previous": f"{Decimal(str(expected)):.2f}",
+                "current": f"{quote.unit_price:.2f}",
+                "currency_code": trader.price_list.currency_id,
+            })
+        prepared.append((product, label, quantity, quote))
+    if changes:
+        raise PriceChangeRequired(changes)
     return prepared
 
 
@@ -119,11 +143,16 @@ def allocate_order_number(day: date) -> str:
     return f"{prefix}{highest + 1}"
 
 
-def create_order(trader, note, items):
-    prepared = prepare_order_lines(trader, items)
-    total = sum((unit_price * quantity for _, _, quantity, unit_price in prepared), Decimal("0"))
-    today = timezone.localdate()
+def create_order(trader, note, items, acknowledge_price_changes=False):
+    prepared = prepare_order_lines(trader, items, acknowledge_price_changes)
     currency = trader.price_list.currency
+    places = currency.decimal_places
+    line_totals = []
+    for product, label, quantity, quote in prepared:
+        line_total = quantize_money(quote.unit_price * quantity, places)
+        line_totals.append((product, label, quantity, quote, line_total))
+    total = quantize_money(sum((line_total for *_, line_total in line_totals), Decimal("0")), places)
+    today = timezone.localdate()
     for _ in range(3):
         try:
             with transaction.atomic():
@@ -131,6 +160,10 @@ def create_order(trader, note, items):
                     number=allocate_order_number(today),
                     trader=trader,
                     trader_name_ar=trader.name_ar,
+                    trader_name_en=trader.name_en,
+                    trader_email=trader.user.email or "",
+                    price_list_name_ar=trader.price_list.name_ar,
+                    price_list_name_en=trader.price_list.name_en,
                     ordered_on=today,
                     status=Order.Status.REVIEW,
                     currency=currency,
@@ -146,15 +179,40 @@ def create_order(trader, note, items):
                         product_name_ar=product.name_ar,
                         product_name_en=product.name_en,
                         option_label=label,
+                        unit_ar=product.unit_ar,
+                        unit_en=product.unit_en,
+                        category_path_ar=category_snapshot(product.category)[0],
+                        category_path_en=category_snapshot(product.category)[1],
                         quantity=quantity,
-                        unit_price=unit_price,
+                        unit_price=quote.unit_price,
+                        base_price=quote.base_price,
+                        base_currency=quote.base_currency,
+                        discount_percent=quote.discount_percent,
+                        exchange_rate=quote.exchange_rate,
+                        line_total=line_total,
                     )
-                    for product, label, quantity, unit_price in prepared
+                    for product, label, quantity, quote, line_total in line_totals
                 ])
             return Order.objects.prefetch_related("lines").select_related("currency", "trader").get(pk=order.pk)
         except IntegrityError:
             continue
     raise ValidationError("Could not allocate an order number.")
+
+
+def category_snapshot(category):
+    """Category names at order time. Stored on the line so later moves do not rewrite history."""
+    arabic = []
+    english = []
+    seen = set()
+    current = category
+    while current is not None and current.pk not in seen:
+        seen.add(current.pk)
+        arabic.append(current.name_ar)
+        english.append(current.name_en)
+        if not current.parent_id:
+            break
+        current = Category.objects.filter(pk=current.parent_id).first()
+    return " / ".join(reversed(arabic)), " / ".join(reversed(english))
 
 
 def get_site_settings():
@@ -201,6 +259,8 @@ PRODUCT_FIELDS = (
     "code",
     "category",
     "base_price_ils",
+    "base_price_usd",
+    "base_currency",
     "unit_ar",
     "unit_en",
     "min_qty",
@@ -533,14 +593,19 @@ def save_price_list(data, price_list=None):
             if PriceList.objects.filter(pk=data["id"]).exists():
                 raise ValidationError({"id": ["This price list id is already in use."]})
             price_list = PriceList(id=data["id"])
-        for field in ("name_ar", "name_en", "currency", "is_active"):
+        for field in ("name_ar", "name_en", "currency", "is_active", "pricing_mode", "default_discount_percent", "discount_scope", "is_default"):
             if field in data:
                 setattr(price_list, field, data[field])
-        if not creating and "currency" in data and data["currency"].code != "ILS":
+        legacy = price_list.pricing_mode != PriceList.PricingMode.RULE_BASED
+        if legacy and not creating and "currency" in data and data["currency"].code != "ILS":
             _require_complete_prices(price_list, set(price_list.items.values_list("product_id", flat=True)))
+        if price_list.is_default:
+            PriceList.objects.exclude(pk=price_list.pk).filter(is_default=True).update(is_default=False)
         price_list.full_clean()
         price_list.save()
-        return PriceList.objects.select_related("currency").get(pk=price_list.pk)
+        if "scope_categories" in data:
+            price_list.scope_categories.set(data["scope_categories"])
+        return _priced_list(price_list.pk)
 
 
 def _require_complete_prices(price_list, product_ids):
@@ -551,6 +616,12 @@ def _require_complete_prices(price_list, product_ids):
         raise ValidationError({"prices": ["Enter a price for every product before saving a non-ILS list."]})
 
 
+def _priced_list(price_list_id):
+    return PriceList.objects.select_related("currency").prefetch_related(
+        "items", "scope_categories", "category_rules", "product_rules"
+    ).get(pk=price_list_id)
+
+
 def replace_price_list_prices(price_list, rows):
     product_ids = [row["product_id"] for row in rows]
     if len(product_ids) != len(set(product_ids)):
@@ -559,8 +630,7 @@ def replace_price_list_prices(price_list, rows):
     unknown = [product_id for product_id in product_ids if product_id not in known]
     if unknown:
         raise ValidationError({"prices": ["Unknown product."]})
-    currency_code = price_list.currency_id
-    if currency_code != "ILS":
+    if price_list.pricing_mode != PriceList.PricingMode.RULE_BASED and price_list.currency_id != "ILS":
         _require_complete_prices(price_list, product_ids)
     with transaction.atomic():
         kept = []
@@ -572,7 +642,128 @@ def replace_price_list_prices(price_list, rows):
             )
             kept.append(item.pk)
         PriceListItem.objects.filter(price_list=price_list).exclude(pk__in=kept).delete()
-    return PriceList.objects.select_related("currency").prefetch_related("items").get(pk=price_list.pk)
+    return _priced_list(price_list.pk)
+
+
+def default_price_list():
+    """The list future trader registration should assign. Existing traders are left unchanged."""
+    return (
+        PriceList.objects.select_related("currency")
+        .filter(is_default=True, is_active=True, pricing_mode=PriceList.PricingMode.RULE_BASED)
+        .first()
+    )
+
+
+def pricing_mode_preview(price_list, pricing_mode):
+    products = list(Product.objects.select_related("category", "base_currency").order_by("id"))
+    current = quote_many(price_list, products)
+    proposed = quote_many(price_list, products, mode=pricing_mode)
+    rows = []
+    for product in products:
+        before = current[product.id]
+        after = proposed[product.id]
+        rows.append({
+            "product_id": product.id,
+            "code": product.code,
+            "before": None if before.unit_price is None else f"{before.unit_price:.2f}",
+            "after": None if after.unit_price is None else f"{after.unit_price:.2f}",
+            "after_available": after.available,
+            "after_error": after.error,
+            "changed": before.unit_price != after.unit_price,
+        })
+    return rows
+
+
+def set_pricing_mode(price_list, pricing_mode, confirm):
+    if pricing_mode not in PriceList.PricingMode.values:
+        raise ValidationError({"pricing_mode": ["Unsupported pricing mode."]})
+    preview = pricing_mode_preview(price_list, pricing_mode)
+    if not confirm:
+        return {"confirm_required": True, "pricing_mode": pricing_mode, "changes": preview}
+    if price_list.pricing_mode != pricing_mode:
+        price_list.pricing_mode = pricing_mode
+        price_list.full_clean()
+        price_list.save(update_fields=["pricing_mode", "updated_at"])
+    return price_list
+
+
+def _require_rule_list(price_list):
+    if price_list.pricing_mode != PriceList.PricingMode.RULE_BASED:
+        raise ValidationError({"pricing_mode": ["Switch this list to discount rules before adding rules."]})
+
+
+def save_category_rule(price_list, data, rule=None):
+    _require_rule_list(price_list)
+    discount = parse_discount(data["discount_percent"]) if "discount_percent" in data else None
+    with transaction.atomic():
+        if rule is None:
+            category = data["category"]
+            if PriceListCategoryRule.objects.filter(price_list=price_list, category=category).exists():
+                raise ValidationError({"category_id": ["This category already has a rule on the list."]})
+            rule = PriceListCategoryRule(price_list=price_list, category=category, discount_percent=discount)
+        else:
+            if "category" in data and data["category"].pk != rule.category_id:
+                category = data["category"]
+                if PriceListCategoryRule.objects.filter(price_list=price_list, category=category).exclude(pk=rule.pk).exists():
+                    raise ValidationError({"category_id": ["This category already has a rule on the list."]})
+                rule.category = category
+            if discount is not None:
+                rule.discount_percent = discount
+        if "is_active" in data:
+            rule.is_active = data["is_active"]
+        rule.full_clean()
+        rule.save()
+    return rule
+
+
+def save_product_rule(price_list, data, rule=None):
+    _require_rule_list(price_list)
+    discount = parse_discount(data["discount_percent"]) if "discount_percent" in data else None
+    with transaction.atomic():
+        if rule is None:
+            product = data["product"]
+            if PriceListProductRule.objects.filter(price_list=price_list, product=product).exists():
+                raise ValidationError({"product_id": ["This product already has a rule on the list."]})
+            rule = PriceListProductRule(price_list=price_list, product=product, discount_percent=discount)
+        else:
+            if "product" in data and data["product"].pk != rule.product_id:
+                product = data["product"]
+                if PriceListProductRule.objects.filter(price_list=price_list, product=product).exclude(pk=rule.pk).exists():
+                    raise ValidationError({"product_id": ["This product already has a rule on the list."]})
+                rule.product = product
+            if discount is not None:
+                rule.discount_percent = discount
+        if "is_active" in data:
+            rule.is_active = data["is_active"]
+        rule.full_clean()
+        rule.save()
+    return rule
+
+
+def save_exchange_rate(data, rate=None):
+    source = data.get("source", getattr(rate, "source", None))
+    target = data.get("target", getattr(rate, "target", None))
+    with transaction.atomic():
+        if rate is None:
+            existing = ExchangeRate.objects.filter(source=source, target=target).first()
+            if existing is not None:
+                raise ValidationError({"target": ["An exchange rate for this currency pair already exists. Update it instead."]})
+            rate = ExchangeRate(source=source, target=target, rate=data["rate"])
+        else:
+            if "source" in data:
+                rate.source = data["source"]
+            if "target" in data:
+                rate.target = data["target"]
+            if "rate" in data:
+                rate.rate = data["rate"]
+            duplicate = ExchangeRate.objects.filter(source=rate.source, target=rate.target).exclude(pk=rate.pk)
+            if duplicate.exists():
+                raise ValidationError({"target": ["An exchange rate for this currency pair already exists."]})
+        if "is_active" in data:
+            rate.is_active = data["is_active"]
+        rate.full_clean()
+        rate.save()
+    return rate
 
 
 def update_order_status(order, status):
@@ -607,27 +798,48 @@ def save_invoice(data, invoice=None, upload=None):
         return invoice
 
 
-def update_site_settings(number):
+def update_site_settings(data, files=None):
+    from shop.uploads import UPLOAD_FIELDS, validate_public_upload
+
     setting = get_site_settings()
-    setting.company_whatsapp_number = number
+    for key, value in data.items():
+        setattr(setting, key, value)
+    for key, upload in (files or {}).items():
+        if key not in UPLOAD_FIELDS or upload is None:
+            continue
+        validate_public_upload(upload, UPLOAD_FIELDS[key])
+        current = getattr(setting, key)
+        if current:
+            current.delete(save=False)
+        setattr(setting, key, upload)
     setting.save()
     return setting
 
 
-def import_products(rows):
+def import_products(rows, lang="ar"):
+    english = str(lang or "").lower().startswith("en")
+
+    def say(en, ar):
+        return en if english else ar
+
     if len(rows) > 1000:
-        raise ValidationError({"rows": ["Maximum 1000 rows."]})
+        raise ValidationError({"rows": [say("Maximum 1000 rows.", "الحد الأقصى 1000 صف.")]})
     if not rows:
-        raise ValidationError({"rows": ["Add at least one row."]})
+        raise ValidationError({"rows": [say("Add at least one row.", "أضف صفًا واحدًا على الأقل.")]})
 
     errors = []
     prepared = []
     seen = set(Product.objects.values_list("code", flat=True))
     categories = set(Category.objects.values_list("id", flat=True))
-    for index, row in enumerate(rows):
-        problems = _import_problems(row, seen, categories)
+    for index, raw in enumerate(rows):
+        row, duplicates = _canonicalize_import_row(raw)
+        prefix = say(f"Row {index + 2}", f"صف {index + 2}")
+        if duplicates:
+            errors.append(say(f"{prefix}: duplicate columns", f"{prefix}: أعمدة مكررة"))
+            continue
+        problems = _import_problems(row, seen, categories, english)
         if problems:
-            errors.append(f"Row {index + 2}: " + " · ".join(problems))
+            errors.append(f"{prefix}: " + " · ".join(problems))
             continue
         code = str(_import_cell(row, "Code", "code")).strip()
         seen.add(code)
@@ -656,6 +868,58 @@ def import_products(rows):
     return list(_product_queryset().filter(pk__in=created))
 
 
+_IMPORT_LABELS = {
+    "code": "Code",
+    "كود المنتج": "Code",
+    "name_ar": "Name_AR",
+    "اسم المنتج (عربي)": "Name_AR",
+    "name_en": "Name_EN",
+    "اسم المنتج (إنجليزي)": "Name_EN",
+    "category_id": "Category_ID",
+    "معرّف التصنيف": "Category_ID",
+    "unit_ar": "Unit_AR",
+    "وحدة البيع (عربي)": "Unit_AR",
+    "unit_en": "Unit_EN",
+    "وحدة البيع (إنجليزي)": "Unit_EN",
+    "min_qty": "Min_Qty",
+    "الحد الأدنى للكمية": "Min_Qty",
+    "base_price_ils": "Base_Price_ILS",
+    "price_ils": "Base_Price_ILS",
+    "السعر الأساسي (ils)": "Base_Price_ILS",
+    "available": "Available",
+    "متاح": "Available",
+    "description_ar": "Description_AR",
+    "الوصف (عربي)": "Description_AR",
+    "description_en": "Description_EN",
+    "الوصف (إنجليزي)": "Description_EN",
+}
+
+
+def _import_field(label):
+    text = " ".join(str(label).strip().split())
+    if not text:
+        return None
+    if text in _IMPORT_LABELS:
+        return _IMPORT_LABELS[text]
+    return _IMPORT_LABELS.get(text.lower())
+
+
+def _canonicalize_import_row(row):
+    if not isinstance(row, dict):
+        return {}, ["invalid row"]
+    normalized = {}
+    duplicates = []
+    for raw_key, value in row.items():
+        field = _import_field(raw_key)
+        if field is None:
+            continue
+        if field in normalized:
+            duplicates.append(field)
+            continue
+        normalized[field] = value
+    return normalized, duplicates
+
+
 def _import_cell(row, *names):
     for name in names:
         if name in row and row[name] not in (None, ""):
@@ -663,8 +927,11 @@ def _import_cell(row, *names):
     return None
 
 
-def _import_problems(row, seen, categories):
+def _import_problems(row, seen, categories, english=True):
     from decimal import InvalidOperation
+
+    def say(en, ar):
+        return en if english else ar
 
     problems = []
     code = _import_cell(row, "Code", "code")
@@ -672,31 +939,31 @@ def _import_problems(row, seen, categories):
     name_en = _import_cell(row, "Name_EN", "name_en")
     unit_ar = _import_cell(row, "Unit_AR", "unit_ar")
     unit_en = _import_cell(row, "Unit_EN", "unit_en")
-    if not all(str(value).strip() for value in (code, name_ar, name_en, unit_ar, unit_en)):
-        problems.append("required fields")
+    if not all(value is not None and str(value).strip() for value in (code, name_ar, name_en, unit_ar, unit_en)):
+        problems.append(say("required fields", "حقول مطلوبة"))
     code_text = "" if code is None else str(code).strip()
     if code_text and code_text in seen:
-        problems.append("duplicate code")
+        problems.append(say("duplicate code", "كود مكرر"))
     category_raw = _import_cell(row, "Category_ID", "category_id")
     category_id = _import_int(category_raw)
     if category_id is None or category_id not in categories:
-        problems.append("invalid category")
+        problems.append(say("invalid category", "معرّف التصنيف غير موجود"))
     if _import_int(_import_cell(row, "Min_Qty", "min_qty")) is None:
-        problems.append("invalid minimum")
+        problems.append(say("invalid minimum", "الحد الأدنى غير صالح"))
     else:
         minimum = _import_int(_import_cell(row, "Min_Qty", "min_qty"))
         if minimum < 1:
-            problems.append("invalid minimum")
+            problems.append(say("invalid minimum", "الحد الأدنى غير صالح"))
     price_raw = _import_cell(row, "Base_Price_ILS", "Price_ILS", "base_price_ils")
     try:
         price = Decimal(str(price_raw))
         if price < 0:
-            problems.append("invalid price")
+            problems.append(say("invalid price", "سعر غير صالح"))
     except (InvalidOperation, TypeError):
-        problems.append("invalid price")
+        problems.append(say("invalid price", "سعر غير صالح"))
     available = _import_cell(row, "Available", "available")
     if str(available) not in {"0", "1"}:
-        problems.append("Available must be 0 or 1")
+        problems.append(say("Available must be 0 or 1", "متاح يجب أن يكون 0 أو 1"))
     return problems
 
 
