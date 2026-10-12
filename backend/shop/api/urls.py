@@ -7,6 +7,8 @@ from shop.api.views import (
     CurrentPricingView,
     InvoiceDetailView,
     InvoiceListView,
+    GoogleLoginView,
+    GoogleProfileView,
     LoginView,
     LogoutView,
     MeView,
@@ -22,6 +24,8 @@ from shop.api.views import (
 urlpatterns = [
     path("auth/csrf/", CsrfView.as_view(), name="auth-csrf"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
+    path("auth/google/", GoogleLoginView.as_view(), name="auth-google"),
+    path("auth/google/profile/", GoogleProfileView.as_view(), name="auth-google-profile"),
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("auth/me/", MeView.as_view(), name="auth-me"),
     path("catalog/categories/", CategoryListView.as_view(), name="catalog-categories"),

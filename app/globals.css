@@ -257,6 +257,14 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .category-picker-expand.open{background:#f8eaf2}
 .category-picker-expand.spacer{visibility:hidden}
 .category-picker-state{margin:0;padding:8px;color:#6d5c66;font-size:13px}
+.login-dialog{width:min(440px,calc(100vw - 24px));max-width:100%}
+.login-divider{display:flex;align-items:center;gap:12px;margin:16px 0 8px;color:#8a7380;font-size:13px}
+.login-divider:before,.login-divider:after{content:"";flex:1;height:1px;background:#eadfe6}
+.google-sign-in{position:relative;min-height:48px}
+.google-sign-in-face{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:48px;border:1px solid #d7c5cf;border-radius:8px;background:#fff;color:#2d2730;font-weight:700}
+.google-sign-in-official{position:absolute;inset:0;overflow:hidden;opacity:.01}.google-sign-in-official [role="button"]{width:100%!important;height:48px!important}
+.google-sign-in.is-busy{pointer-events:none;opacity:.6}
+@media(max-width:640px){.google-sign-in-face{font-size:15px}}
 .category-picker-state.error{color:#b44037}
 .category-picker-trigger:focus-visible,.category-picker-search input:focus-visible,.category-picker-option:focus-visible,.category-picker-choice:focus-visible,.category-picker-expand:focus-visible{outline:2px solid #b41f71;outline-offset:1px}
 .prices-page{display:flex;flex-direction:column;gap:16px}

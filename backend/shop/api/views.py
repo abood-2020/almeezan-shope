@@ -23,7 +23,17 @@ from shop.api.serializers import (
 from shop.exports import export_language, invoice_workbook, order_workbook, xlsx_response
 from shop.models import Category, Invoice, Order, category_descendant_ids
 from shop.pricing import PriceChangeRequired, quote_many
-from shop.services import catalog_products, create_order, get_active_trader, get_site_settings, login_trader
+from shop.google_auth import GoogleAuthError
+from shop.services import (
+    authenticate_google,
+    catalog_products,
+    complete_google_profile,
+    create_order,
+    get_active_trader,
+    get_site_settings,
+    google_profile_required,
+    login_trader,
+)
 
 
 def validation_error(exc):
@@ -54,6 +64,41 @@ class LoginView(APIView):
         return Response({"authenticated": True, "trader": trader_payload(trader)})
 
 
+class GoogleLoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def get_authenticate_header(self, request):
+        return "Session"
+
+    def post(self, request):
+        credential = request.data.get("credential") if isinstance(request.data, dict) else None
+        try:
+            trader, profile_required = authenticate_google(request, credential)
+        except GoogleAuthError as exc:
+            return Response({"code": exc.code}, status=exc.status)
+        return Response({
+            "authenticated": True,
+            "trader": trader_payload(trader),
+            "profile_required": profile_required,
+        })
+
+
+class GoogleProfileView(APIView):
+    permission_classes = [IsActiveTrader]
+
+    def post(self, request):
+        trader = get_active_trader(request.user)
+        try:
+            trader = complete_google_profile(trader, request.data)
+        except DjangoValidationError as exc:
+            validation_error(exc)
+        return Response({
+            "authenticated": True,
+            "trader": trader_payload(trader),
+            "profile_required": False,
+        })
+
+
 class LogoutView(APIView):
     permission_classes = [IsActiveTrader]
 
@@ -68,8 +113,12 @@ class MeView(APIView):
     def get(self, request):
         trader = get_active_trader(request.user)
         if trader is None:
-            return Response({"authenticated": False, "trader": None})
-        return Response({"authenticated": True, "trader": trader_payload(trader)})
+            return Response({"authenticated": False, "trader": None, "profile_required": False})
+        return Response({
+            "authenticated": True,
+            "trader": trader_payload(trader),
+            "profile_required": google_profile_required(trader),
+        })
 
 
 class CategoryListView(APIView):

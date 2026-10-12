@@ -102,6 +102,9 @@ def trader_payload(trader):
         "name_ar": trader.name_ar,
         "name_en": trader.name_en,
         "email": trader.user.email,
+        "phone": trader.phone,
+        "country": trader.country,
+        "city": trader.city,
         "active": trader.is_active,
         "price_list": {
             "id": price_list.id,

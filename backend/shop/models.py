@@ -453,6 +453,9 @@ class Trader(models.Model):
     name_ar = models.CharField(max_length=160)
     name_en = models.CharField(max_length=160)
     price_list = models.ForeignKey(PriceList, on_delete=models.PROTECT, related_name="traders")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    country = models.CharField(max_length=80, blank=True, default="")
+    city = models.CharField(max_length=80, blank=True, default="")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -462,6 +465,22 @@ class Trader(models.Model):
 
     def __str__(self):
         return self.name_en
+
+
+class GoogleAccount(models.Model):
+    """Google subject bound to one trader user. The ID token itself is never stored."""
+
+    sub = models.CharField(max_length=255, unique=True)
+    user = models.OneToOneField(User, on_delete=models.PROTECT, related_name="google_account")
+    email = models.EmailField()
+    profile_completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return self.email
 
 
 class Order(models.Model):

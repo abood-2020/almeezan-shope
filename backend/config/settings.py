@@ -47,6 +47,7 @@ ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
 
 # Public browser origin. Used only as a fallback when the explicit origin lists are empty.
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 
 INSTALLED_APPS = [
     "django.contrib.admin",

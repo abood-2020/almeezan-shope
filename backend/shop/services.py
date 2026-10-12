@@ -13,6 +13,7 @@ from shop.models import (
     Category,
     Currency,
     ExchangeRate,
+    GoogleAccount,
     Invoice,
     Order,
     OrderLine,
@@ -221,6 +222,114 @@ def get_site_settings():
         setting = SiteSetting(company_whatsapp_number="")
         setting.save()
     return setting
+
+
+def google_profile_required(trader):
+    account = GoogleAccount.objects.filter(user_id=trader.user_id).only("profile_completed").first()
+    return bool(account and not account.profile_completed)
+
+
+def authenticate_google(request, credential):
+    from django.conf import settings
+
+    from shop.google_auth import GoogleAuthError, verify_google_id_token
+
+    client_id = settings.GOOGLE_CLIENT_ID
+    if not client_id:
+        raise GoogleAuthError("not_configured", 503)
+    identity = verify_google_id_token(credential, client_id)
+    account = GoogleAccount.objects.select_related("user").filter(sub=identity["sub"]).first()
+    if account is not None:
+        return _login_google_account(request, account, identity["email"])
+    if User.objects.filter(email__iexact=identity["email"]).exists():
+        raise GoogleAuthError("email_exists", 409)
+    price_list = default_price_list()
+    if price_list is None:
+        raise GoogleAuthError("no_default_price_list", 503)
+    try:
+        trader = _create_google_trader(identity, price_list)
+    except IntegrityError:
+        account = GoogleAccount.objects.select_related("user").filter(sub=identity["sub"]).first()
+        if account is None:
+            raise GoogleAuthError("invalid", 409) from None
+        return _login_google_account(request, account, identity["email"])
+    login(request, trader.user)
+    return trader, True
+
+
+def _login_google_account(request, account, email):
+    from shop.google_auth import GoogleAuthError
+
+    user = account.user
+    trader = (
+        Trader.objects.select_related("user", "price_list__currency")
+        .filter(user=user)
+        .first()
+    )
+    if not user.is_active or trader is None or not trader.is_active:
+        raise GoogleAuthError("inactive", 403)
+    if email and email != account.email and not User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
+        account.email = email
+        account.save(update_fields=["email"])
+        user.email = email
+        user.save(update_fields=["email"])
+    login(request, user)
+    return trader, not account.profile_completed
+
+
+def _create_google_trader(identity, price_list):
+    import hashlib
+
+    from shop.content import has_markup
+
+    digest = hashlib.sha256(identity["sub"].encode()).hexdigest()
+    username = f"g{digest[:20]}"
+    trader_id = f"g{digest[:31]}"
+    name = identity["name"]
+    if not name or has_markup(name):
+        name = identity["email"].split("@", 1)[0]
+    name = name[:160]
+    with transaction.atomic():
+        user = User(username=username, email=identity["email"], is_staff=False, is_superuser=False, is_active=True)
+        user.set_unusable_password()
+        user.save()
+        trader = Trader.objects.create(
+            id=trader_id,
+            user=user,
+            name_ar=name,
+            name_en=name,
+            price_list=price_list,
+        )
+        GoogleAccount.objects.create(sub=identity["sub"], user=user, email=identity["email"])
+    return Trader.objects.select_related("user", "price_list__currency").get(pk=trader.pk)
+
+
+def complete_google_profile(trader, data):
+    from shop.content import has_markup, normalize_phone, plain
+
+    account = GoogleAccount.objects.filter(user_id=trader.user_id).first()
+    if account is None or account.profile_completed:
+        raise ValidationError({"profile": ["This account does not need a Google profile."]})
+    name = plain(data.get("business_name"), "business_name", 160).strip()
+    if has_markup(name) or len(name) < 2:
+        raise ValidationError({"business_name": ["Enter the business name."]})
+    phone = normalize_phone(str(data.get("phone") or ""), "phone")
+    if not phone:
+        raise ValidationError({"phone": ["Enter a phone number."]})
+    country = plain(data.get("country"), "country", 80).strip()
+    city = plain(data.get("city"), "city", 80).strip()
+    if len(country) < 2 or len(city) < 2:
+        raise ValidationError({"country": ["Enter the country and city."]})
+    trader.name_ar = name
+    trader.name_en = name
+    trader.phone = phone
+    trader.country = country
+    trader.city = city
+    trader.full_clean()
+    trader.save()
+    account.profile_completed = True
+    account.save(update_fields=["profile_completed"])
+    return Trader.objects.select_related("user", "price_list__currency").get(pk=trader.pk)
 
 
 def login_staff(request, username, password):

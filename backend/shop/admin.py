@@ -18,6 +18,7 @@ from .models import (
     ProductSize,
     ContentPage,
     FaqItem,
+    GoogleAccount,
     HomepageSection,
     SiteSetting,
     Trader,
@@ -118,6 +119,13 @@ class TraderAdmin(admin.ModelAdmin):
     @admin.display(description="Email")
     def email(self, obj):
         return obj.user.email
+
+
+@admin.register(GoogleAccount)
+class GoogleAccountAdmin(admin.ModelAdmin):
+    list_display = ("email", "profile_completed", "created_at")
+    search_fields = ("email", "user__username")
+    readonly_fields = ("sub", "user", "email", "profile_completed", "created_at")
 
 
 @admin.register(Order)
