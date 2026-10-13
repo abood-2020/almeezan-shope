@@ -35,7 +35,7 @@ assert(JSON.stringify(arabicMatrix[0]) === JSON.stringify(arabicHeaders), 'Arabi
 assert(JSON.stringify(englishMatrix[0]) === JSON.stringify(englishHeaders), 'English headers');
 assert(englishHeaders.join('|') === PRODUCT_TEMPLATE_FIELDS.map(field => field.key).join('|'), 'English column order');
 assert(arabicMatrix[1].join('|') === englishMatrix[1].join('|'), 'Sample values are not translated');
-assert(arabicMatrix[1][0] === 'RW-NEW-001' && arabicMatrix[1][3] === 1 && arabicMatrix[1][7] === 25 && arabicMatrix[1][8] === 1, 'Sample contract');
+assert(arabicMatrix[1][0] === 'RW-NEW-001' && arabicMatrix[1][3] === 1 && arabicMatrix[1][7] === 'CNY' && arabicMatrix[1][8] === 100 && (arabicMatrix[1][9] === '' || arabicMatrix[1][9] == null) && arabicMatrix[1][10] === 1, 'Sample contract');
 assert(!englishHeaders.includes('Base_Price_USD') && !arabicHeaders.includes('السعر الأساسي (USD)'), 'USD column was not added');
 
 for (const field of PRODUCT_TEMPLATE_FIELDS) {
@@ -48,13 +48,18 @@ assert(canonicalHeader('price_ils') === 'Base_Price_ILS', 'Lowercase legacy pric
 const categoryIds = [1];
 const arabicImport = inspectProductImport(arabicMatrix, [], categoryIds, 'ar');
 assert(arabicImport.errors.length === 0, `Arabic template rows: ${arabicImport.errors.join(' | ')}`);
-assert(arabicImport.rows[0].Code === 'RW-NEW-001' && arabicImport.rows[0].Name_AR === 'منتج جديد' && arabicImport.rows[0].Base_Price_ILS === 25, 'Arabic row mapping');
+assert(arabicImport.rows[0].Code === 'RW-NEW-001' && arabicImport.rows[0].Name_AR === 'منتج جديد' && arabicImport.rows[0].Original_Currency === 'CNY' && arabicImport.rows[0].Original_Price === 100, 'Arabic row mapping');
 
 const englishImport = inspectProductImport(englishMatrix, [], categoryIds, 'en');
 assert(englishImport.errors.length === 0, `English template rows: ${englishImport.errors.join(' | ')}`);
 assert(englishImport.rows[0].Name_EN === 'New product' && englishImport.rows[0].Category_ID === 1, 'English row mapping');
 
-const legacy = [englishHeaders.map(header => (header === 'Base_Price_ILS' ? 'Price_ILS' : header)), englishMatrix[1]];
+const legacyHeaders = englishHeaders.map(header => (header === 'Base_Price_ILS' ? 'Price_ILS' : header));
+const legacyRow = englishMatrix[1].slice();
+legacyRow[englishHeaders.indexOf('Original_Currency')] = '';
+legacyRow[englishHeaders.indexOf('Original_Price')] = '';
+legacyRow[englishHeaders.indexOf('Base_Price_ILS')] = 25;
+const legacy = [legacyHeaders, legacyRow];
 const legacyImport = inspectProductImport(legacy, [], categoryIds, 'en');
 assert(legacyImport.errors.length === 0, `Legacy import: ${legacyImport.errors.join(' | ')}`);
 assert(legacyImport.rows[0].Base_Price_ILS === 25 && legacyImport.rows[0].Code === 'RW-NEW-001', 'Legacy price maps to ILS');

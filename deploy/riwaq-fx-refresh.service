@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Riwaq exchange rates
+
+[Service]
+Type=oneshot
+User=riwaq
+Group=riwaq
+WorkingDirectory=/opt/riwaq/app/backend
+ExecStart=/opt/riwaq/app/backend/.venv/bin/python manage.py refresh_exchange_rates
+TimeoutStartSec=90

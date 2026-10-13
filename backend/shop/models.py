@@ -122,6 +122,21 @@ class Product(models.Model):
         related_name="priced_products",
         default="ILS",
     )
+    original_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    original_currency = models.ForeignKey(
+        "Currency",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="original_products",
+    )
+    price_review_required = models.BooleanField(default=False)
     unit_ar = models.CharField(max_length=40)
     unit_en = models.CharField(max_length=40)
     min_qty = models.PositiveIntegerField(validators=[MinValueValidator(1)])
@@ -140,6 +155,17 @@ class Product(models.Model):
             models.CheckConstraint(
                 check=models.Q(base_price_usd__isnull=True) | models.Q(base_price_usd__gte=0),
                 name="product_usd_base_price_gte_0",
+            ),
+            models.CheckConstraint(
+                check=models.Q(original_price__isnull=True) | models.Q(original_price__gte=0),
+                name="product_original_price_gte_0",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(original_price__isnull=True, original_currency__isnull=True)
+                    | models.Q(original_price__isnull=False, original_currency__isnull=False)
+                ),
+                name="product_original_price_and_currency_together",
             ),
         ]
 
@@ -447,6 +473,53 @@ class ExchangeRate(models.Model):
         return f"1 {self.source_id} = {self.rate} {self.target_id}"
 
 
+class RateSnapshot(models.Model):
+    """One complete USD-based rate set. Only a full, validated set becomes current."""
+
+    provider = models.CharField(max_length=40, default="frankfurter")
+    provider_date = models.DateField()
+    fetched_at = models.DateTimeField()
+    is_current = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-provider_date", "-fetched_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_current"],
+                condition=models.Q(is_current=True),
+                name="one_current_rate_snapshot",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.provider} {self.provider_date}"
+
+
+class RateSnapshotLine(models.Model):
+    """1 USD equals `usd_rate` units of `currency`. USD itself is stored as 1."""
+
+    snapshot = models.ForeignKey(RateSnapshot, on_delete=models.CASCADE, related_name="lines")
+    currency = models.ForeignKey(Currency, on_delete=models.PROTECT, related_name="snapshot_lines")
+    usd_rate = models.DecimalField(max_digits=18, decimal_places=8)
+
+    class Meta:
+        ordering = ["currency_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["snapshot", "currency"], name="unique_snapshot_currency"),
+            models.CheckConstraint(check=models.Q(usd_rate__gt=0), name="snapshot_usd_rate_positive"),
+        ]
+
+    def __str__(self):
+        return f"1 USD = {self.usd_rate} {self.currency_id}"
+
+
+class FxRefreshLock(models.Model):
+    """Single row used to stop overlapping refreshes from publishing partial rates."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class Trader(models.Model):
     id = models.CharField(max_length=32, primary_key=True)
     user = models.OneToOneField(User, on_delete=models.PROTECT, related_name="trader")
@@ -465,6 +538,31 @@ class Trader(models.Model):
 
     def __str__(self):
         return self.name_en
+
+
+class TraderCategoryDiscount(models.Model):
+    """A discount for one trader and one category. It does not change a shared price list."""
+
+    trader = models.ForeignKey(Trader, on_delete=models.CASCADE, related_name="category_discounts")
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="trader_discounts")
+    discount_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("100"))],
+    )
+
+    class Meta:
+        ordering = ["trader_id", "category_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["trader", "category"], name="unique_trader_category_discount"),
+            models.CheckConstraint(
+                check=models.Q(discount_percent__gte=0) & models.Q(discount_percent__lte=100),
+                name="trader_category_discount_between_0_and_100",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.trader_id} {self.category_id} {self.discount_percent}%"
 
 
 class GoogleAccount(models.Model):
@@ -497,6 +595,11 @@ class Order(models.Model):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.REVIEW)
     currency = models.ForeignKey(Currency, on_delete=models.PROTECT, related_name="orders")
     currency_symbol = models.CharField(max_length=8)
+    rate_snapshot = models.ForeignKey(
+        RateSnapshot, null=True, blank=True, on_delete=models.PROTECT, related_name="orders"
+    )
+    rate_provider = models.CharField(max_length=40, blank=True, default="")
+    rate_provider_date = models.DateField(null=True, blank=True)
     note = models.TextField(blank=True)
     price_list_name_ar = models.CharField(max_length=160, blank=True, default="")
     price_list_name_en = models.CharField(max_length=160, blank=True, default="")
@@ -543,8 +646,11 @@ class OrderLine(models.Model):
     )
     base_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     base_currency = models.CharField(max_length=3, blank=True, default="")
+    original_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    original_currency = models.CharField(max_length=3, blank=True, default="")
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     exchange_rate = models.DecimalField(max_digits=18, decimal_places=8, null=True, blank=True)
+    pricing_note = models.CharField(max_length=160, blank=True, default="")
     line_total = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
     class Meta:

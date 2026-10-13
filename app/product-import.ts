@@ -8,7 +8,9 @@ export const PRODUCT_TEMPLATE_FIELDS = [
   {key: 'Unit_AR', ar: 'وحدة البيع (عربي)', sample: 'قطعة'},
   {key: 'Unit_EN', ar: 'وحدة البيع (إنجليزي)', sample: 'piece'},
   {key: 'Min_Qty', ar: 'الحد الأدنى للكمية', sample: 6},
-  {key: 'Base_Price_ILS', ar: 'السعر الأساسي (ILS)', sample: 25},
+  {key: 'Original_Currency', ar: 'العملة الأصلية', sample: 'CNY'},
+  {key: 'Original_Price', ar: 'السعر الأصلي', sample: 100},
+  {key: 'Base_Price_ILS', ar: 'السعر الأساسي (ILS)', sample: ''},
   {key: 'Available', ar: 'متاح', sample: 1},
   {key: 'Description_AR', ar: 'الوصف (عربي)', sample: 'وصف المنتج'},
   {key: 'Description_EN', ar: 'الوصف (إنجليزي)', sample: 'Product description'},
@@ -24,6 +26,11 @@ const LEGACY_HEADERS: Record<string, string> = {
   min_qty: 'Min_Qty',
   base_price_ils: 'Base_Price_ILS',
   price_ils: 'Base_Price_ILS',
+  'السعر الأساسي (ils)': 'Base_Price_ILS',
+  original_currency: 'Original_Currency',
+  'العملة الأصلية': 'Original_Currency',
+  original_price: 'Original_Price',
+  'السعر الأصلي': 'Original_Price',
   available: 'Available',
   description_ar: 'Description_AR',
   description_en: 'Description_EN',
@@ -85,10 +92,15 @@ export function inspectProductImport(matrix: unknown[][], existingCodes: Iterabl
     }
     indexByField.set(field, index);
   });
+  const optional = new Set(['Original_Currency', 'Original_Price', 'Base_Price_ILS']);
   for (const field of PRODUCT_TEMPLATE_FIELDS) {
+    if (optional.has(field.key)) continue;
     if (!indexByField.has(field.key)) {
       errors.push(phrase(lang, `عمود مفقود: ${field.ar}`, `Missing column: ${field.key}`));
     }
+  }
+  if (!indexByField.has('Base_Price_ILS') && !(indexByField.has('Original_Currency') && indexByField.has('Original_Price'))) {
+    errors.push(phrase(lang, 'أضف السعر الأصلي أو السعر الأساسي بالشيكل', 'Add Original_Price or Base_Price_ILS'));
   }
   const body = matrix.slice(1).filter(row => (row || []).some(cell => String(cell ?? '').trim() !== ''));
   if (!body.length) errors.push(phrase(lang, 'الملف فارغ', 'The file is empty'));
@@ -106,8 +118,19 @@ export function inspectProductImport(matrix: unknown[][], existingCodes: Iterabl
     codes.add(String(row.Code));
     if (!Number.isInteger(Number(row.Category_ID)) || !categoryIds.includes(Number(row.Category_ID))) problems.push(phrase(lang, 'معرّف التصنيف غير موجود', 'Category_ID must match an existing category id'));
     if (!Number.isInteger(Number(row.Min_Qty)) || Number(row.Min_Qty) < 1) problems.push(phrase(lang, 'الحد الأدنى غير صالح', 'invalid minimum'));
-    const price = row.Base_Price_ILS;
-    if (price === undefined || price === '' || !Number.isFinite(Number(price)) || Number(price) < 0) problems.push(phrase(lang, 'سعر غير صالح', 'invalid price'));
+    const legacy = row.Base_Price_ILS;
+    const originalCurrency = String(row.Original_Currency ?? '').trim().toUpperCase();
+    const originalPrice = row.Original_Price;
+    const hasLegacy = legacy !== undefined && legacy !== '';
+    const hasOriginal = originalCurrency !== '' || (originalPrice !== undefined && originalPrice !== '');
+    if (!hasLegacy && !hasOriginal) problems.push(phrase(lang, 'سعر غير صالح', 'invalid price'));
+    if (hasLegacy && (!Number.isFinite(Number(legacy)) || Number(legacy) < 0)) problems.push(phrase(lang, 'سعر غير صالح', 'invalid price'));
+    if (hasOriginal) {
+      const amount = Number(originalPrice);
+      if (!['CNY', 'USD', 'ILS'].includes(originalCurrency) || !Number.isFinite(amount) || amount < 0) problems.push(phrase(lang, 'السعر الأصلي أو عملته غير صالحة', 'invalid original price'));
+      else if (hasLegacy && originalCurrency !== 'ILS') problems.push(phrase(lang, 'لا تجمع السعر الأصلي بعملة غير الشيكل مع السعر الأساسي بالشيكل', 'ambiguous price columns'));
+      else if (hasLegacy && originalCurrency === 'ILS' && Number(legacy) !== amount) problems.push(phrase(lang, 'السعر الأصلي لا يطابق السعر الأساسي بالشيكل', 'ambiguous price columns'));
+    }
     if (!['0', '1'].includes(String(row.Available))) problems.push(phrase(lang, 'متاح يجب أن يكون 0 أو 1', 'Available must be 0 or 1'));
     if (problems.length) errors.push(`${phrase(lang, `صف ${index + 2}`, `Row ${index + 2}`)}: ${problems.join(' · ')}`);
   });

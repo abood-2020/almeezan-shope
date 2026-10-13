@@ -5,7 +5,9 @@ from django.core.management import call_command
 from rest_framework.test import APIClient
 from django.test import TestCase
 
-from shop.models import Order, OrderLine, PriceListItem, Product, ProductOption, Trader
+from shop.fx import publish_rates
+from shop.models import Order, OrderLine, PriceList, PriceListItem, Product, ProductOption, Trader, TraderCategoryDiscount
+from shop.pricing import quote_many
 
 
 class ShopApiTests(TestCase):
@@ -110,6 +112,92 @@ class ShopApiTests(TestCase):
         detail = self.client.get("/api/catalog/products/1/")
         self.assertEqual(detail.status_code, 200)
         self.assertNotIn("price", detail.data)
+
+    def test_public_prices_for_guests_staff_and_trader_discounts(self):
+        from datetime import date
+
+        public = PriceList.objects.create(
+            id="public",
+            name_ar="السعر العام",
+            name_en="Public price",
+            currency_id="USD",
+            pricing_mode="rule_based",
+            default_discount_percent=Decimal("0"),
+            is_default=True,
+            is_active=True,
+        )
+        product = Product.objects.create(
+            category_id=1,
+            name_ar="منتج عام",
+            name_en="Public sample",
+            code="RW-PUBLIC",
+            base_price_ils=Decimal("0"),
+            original_price=Decimal("14.94"),
+            original_currency_id="USD",
+            unit_ar="قطعة",
+            unit_en="piece",
+            min_qty=1,
+        )
+        publish_rates(date(2026, 10, 12), {"USD": Decimal("1"), "CNY": Decimal("6.69280000"), "ILS": Decimal("3.06950000")})
+
+        def shown(client, code):
+            response = client.get(f"/api/catalog/products/{product.id}/?currency={code}")
+            self.assertEqual(response.status_code, 200, response.data)
+            return response.data
+
+        guest = shown(self.client, "USD")
+        self.assertEqual(guest["price"], "14.94")
+        self.assertEqual(guest["currency_code"], "USD")
+        self.assertEqual(guest["currency_symbol"], "$")
+        for hidden in ("base_price_ils", "base_price_usd", "original_price", "discount_percent", "trader"):
+            self.assertNotIn(hidden, guest)
+        spoiled = self.client.get(f"/api/catalog/products/{product.id}/?currency=USD&trader_id=atlas")
+        self.assertEqual(spoiled.data["price"], "14.94")
+        omitted = self.client.get(f"/api/catalog/products/{product.id}/")
+        self.assertEqual(omitted.data["price"], "14.94")
+        self.assertEqual(omitted.data["currency_code"], "USD")
+        self.assertEqual(
+            self.client.post("/api/orders/", {"items": [{"product_id": product.id, "qty": 1}]}, format="json").status_code,
+            403,
+        )
+        listed = next(row for row in self.client.get("/api/catalog/products/?currency=USD").data if row["id"] == product.id)
+        self.assertEqual(listed["price"], "14.94")
+
+        ils_quote = quote_many(public, [product], display_currency="ILS")[product.id]
+        cny_quote = quote_many(public, [product], display_currency="CNY")[product.id]
+        ils = shown(self.client, "ILS")
+        cny = shown(self.client, "CNY")
+        self.assertEqual(ils["price"], f"{ils_quote.unit_price:.2f}")
+        self.assertEqual(ils["currency_code"], "ILS")
+        self.assertEqual(cny["price"], f"{cny_quote.unit_price:.2f}")
+        self.assertEqual(cny["currency_code"], "CNY")
+        self.assertNotEqual(ils["price"], "14.94")
+
+        staff = APIClient()
+        self.assertEqual(staff.post("/api/admin/auth/login/", {"username": "admin", "password": "demo123"}, format="json").status_code, 200)
+        self.assertEqual(shown(staff, "USD")["price"], "14.94")
+        self.assertEqual(shown(staff, "ILS")["price"], ils["price"])
+
+        plain_user = User.objects.create_user("plain-trader", password="demo123")
+        Trader.objects.create(id="plain", user=plain_user, name_ar="بدون خصم", name_en="No discount", price_list=public, is_active=True)
+        plain = APIClient()
+        plain.post("/api/auth/login/", {"username": "plain-trader", "password": "demo123"}, format="json")
+        self.assertEqual(shown(plain, "USD")["price"], "14.94")
+
+        user = User.objects.create_user("mohammad", password="demo123")
+        Trader.objects.create(id="mohammad", user=user, name_ar="محمد", name_en="Mohammad", price_list=public, is_active=True)
+        TraderCategoryDiscount.objects.create(trader_id="mohammad", category_id=1, discount_percent=Decimal("7.00"))
+        mohammad = APIClient()
+        mohammad.post("/api/auth/login/", {"username": "mohammad", "password": "demo123"}, format="json")
+        self.assertEqual(shown(mohammad, "USD")["price"], "13.89")
+        priced = next(row for row in mohammad.get("/api/pricing/current/?currency=USD").data["prices"] if row["product_id"] == product.id)
+        self.assertEqual(priced["price"], "13.89")
+        self.assertEqual(shown(self.client, "USD")["price"], "14.94")
+        self.assertEqual(shown(plain, "USD")["price"], "14.94")
+        self.assertEqual(shown(staff, "USD")["price"], "14.94")
+        horizon = APIClient()
+        horizon.post("/api/auth/login/", {"username": "trader", "password": "demo123"}, format="json")
+        self.assertEqual(horizon.get("/api/catalog/products/1/").data["price"], "82.00")
 
     def test_authenticated_catalog_returns_ils_price(self):
         self.login()

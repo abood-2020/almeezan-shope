@@ -325,3 +325,54 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .price-editor-table .text-button{display:block;margin-top:4px;color:#b41f71;font-size:12px}
 @media(max-width:900px){.rates-form{grid-template-columns:1fr 1fr}.rates-form>.btn{grid-column:1/-1;justify-self:start}.pricing-rule-row{grid-template-columns:1fr 1fr}.pricing-rule-row>.btn{grid-column:1/-1}}
 @media(max-width:640px){.rates-form,.pricing-rule-row,.price-settings-grid{grid-template-columns:1fr}.price-board{grid-template-columns:1fr}.rates-list li,.rule-line{flex-wrap:wrap}.rule-line .button-row{width:100%}}
+.editor-dialog{max-height:92vh;overflow:auto}
+.trader-discounts{display:flex;flex-direction:column;gap:8px;margin-top:6px;padding-top:12px;border-top:1px solid #eadfe6}
+.trader-discounts-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.trader-discounts-empty{margin:0;padding:10px 12px;border:1px dashed #eadfe6;border-radius:8px;color:#6d5b66;font-size:13px}
+.trader-discount-list{display:flex;flex-direction:column;gap:10px}
+.trader-discount-row{display:grid;grid-template-columns:minmax(0,1fr) 110px auto;gap:8px;align-items:end}
+.trader-discount-row .icon-button{height:42px}
+.currency-switch{display:flex;align-items:center}
+.currency-switch select{height:36px;min-width:76px;border-radius:8px;padding:0 8px;background:#fff;font-weight:700}
+.fx-panel{display:flex;flex-direction:column;gap:14px;margin-bottom:18px;padding:16px;border:1px solid #eadfe6;border-radius:12px;background:#fff}
+.fx-panel-head,.fx-rates{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.fx-panel-head p,.fx-meta{margin:0;color:#6d5b66;font-size:13px}
+.fx-rates{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.fx-rates div{display:flex;flex-direction:column;gap:2px;padding:10px;border-radius:8px;background:#fbf7f9}
+.fx-rates small{color:#6d5b66}
+.fx-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fx-meta div{display:flex;flex-direction:column;gap:2px}
+.fx-meta dd{margin:0;font-weight:700}
+.fx-status.stale,.fx-status.blocked{color:#9a3d68}
+.original-price-preview{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;padding:10px 12px;border-radius:8px;background:#fbf7f9}
+.original-price-preview small{flex-basis:100%;color:#6d5b66;font-weight:500}
+.mobile-store-sheet .currency-switch{margin:12px 16px 0}
+@media(max-width:640px){.trader-discount-row,.fx-rates,.fx-meta{grid-template-columns:1fr}.fx-panel-head{align-items:flex-start;flex-direction:column}}
+.trader-table [data-slot=table-container]{overflow-x:auto}
+.trader-table table{min-width:920px}
+.trader-table .col-contact{width:8.5rem;max-width:10.5rem;white-space:nowrap}
+.trader-table .col-contact bdi,.trader-table .col-contact .cell-empty{display:inline-block;max-width:10rem;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
+.cell-empty{color:#8d7d86}
+.editor-dialog.trader-editor{display:flex;flex-direction:column;width:min(720px,calc(100vw - 2rem))!important;max-width:720px!important;max-height:min(92vh,880px);overflow:hidden;gap:8px}
+.trader-editor form{display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden}
+.trader-editor .trader-editor-body{overflow:auto;min-height:0;flex:1;padding-bottom:4px}
+.trader-editor .form-grid{align-items:start}
+.trader-editor .form-grid .field-label{display:flex;flex-direction:column;gap:6px;margin:0 0 12px;min-width:0}
+.trader-editor .form-grid .field-label input{margin-top:0;width:100%;height:42px;padding:0 12px;line-height:40px}
+.trader-editor .form-grid .choice{width:100%;min-width:0;height:42px;min-height:42px;padding:0 12px;line-height:40px}
+.trader-editor .trader-password-note{margin:0 0 8px}
+.trader-editor .trader-editor-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;margin-top:0;padding-top:12px;border-top:1px solid #eadfe6;background:#fff}
+.trader-editor .trader-editor-footer .btn{min-width:148px}
+@media(max-width:640px){
+.trader-table thead{display:table-header-group}
+.trader-table tbody{display:table-row-group;padding:0}
+.trader-table tr{display:table-row;border:0;padding:0;background:transparent}
+.trader-table td{display:table-cell;white-space:nowrap;padding:12px 14px;align-items:initial}
+.trader-table td:before{content:none}
+.trader-table td:first-child{grid-column:auto}
+.trader-table table{min-width:920px;width:max-content}
+.trader-editor .form-grid{grid-template-columns:1fr}
+.editor-dialog.trader-editor{width:calc(100vw - 16px)!important;max-width:calc(100vw - 16px)!important}
+.trader-editor .trader-editor-footer{flex-direction:column;align-items:stretch}
+.trader-editor .trader-editor-footer .btn{width:100%}
+}

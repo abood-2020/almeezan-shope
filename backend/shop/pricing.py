@@ -11,7 +11,8 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError
 
-from shop.models import Category, PriceList
+from shop.fx import checkout_allowed, conversion_factor, current_snapshot, rate_status, snapshot_rates
+from shop.models import Category, PriceList, TraderCategoryDiscount
 
 
 BASE_CURRENCY = "ILS"
@@ -36,6 +37,11 @@ class PriceQuote:
     error: str = ""
     calculated: Decimal | None = None
     overridden: bool = False
+    original_price: Decimal | None = None
+    original_currency: str = ""
+    pricing_note: str = ""
+    checkout_allowed: bool = True
+    rate_status: str = ""
 
 
 def money_places(currency) -> int:
@@ -59,12 +65,21 @@ def unit_price(price_list, product):
     return quote_many(price_list, [product])[product.id].unit_price
 
 
-def quote_many(price_list, products, mode=None):
+def quote_many(price_list, products, mode=None, display_currency=None, trader=None):
+    """Quote every product from one rate snapshot.
+
+    A product with an original price is converted from that fixed amount.
+    Products that still have two independently entered base prices keep the
+    existing list-currency behavior until an administrator chooses an original.
+    """
     products = list(products)
     mode = mode or price_list.pricing_mode
     if mode == PriceList.PricingMode.LEGACY:
-        return {product.id: _legacy_quote(price_list, product, _legacy_prices(price_list)) for product in products}
-    return _rule_quotes(price_list, products)
+        quotes = {product.id: _legacy_quote(price_list, product, _legacy_prices(price_list)) for product in products}
+    else:
+        quotes = _rule_quotes(price_list, products)
+    display = (display_currency or price_list.currency_id or BASE_CURRENCY).upper()
+    return _present_quotes(price_list, products, quotes, display, trader, mode)
 
 
 def _legacy_prices(price_list):
@@ -171,6 +186,143 @@ def _simple_quote(product, overrides, scope, target, places, discount):
     )
 
 
+def _present_quotes(price_list, products, quotes, display, trader, mode):
+    snapshot = current_snapshot()
+    rates = snapshot_rates(snapshot)
+    status = rate_status(snapshot)
+    parents = dict(Category.objects.exclude(parent_id=None).values_list("id", "parent_id"))
+    trader_rules = {}
+    if trader is not None:
+        trader_rules = {
+            row.category_id: row.discount_percent
+            for row in TraderCategoryDiscount.objects.filter(trader=trader)
+        }
+    scope = None if mode == PriceList.PricingMode.LEGACY else _discount_scope_ids(price_list)
+    overrides = _legacy_prices(price_list)
+    places = 2
+    presented = {}
+    for product in products:
+        if mode != PriceList.PricingMode.LEGACY and _has_original(product):
+            quote = _original_quote(product, price_list, display, rates, snapshot, status, scope, overrides, places)
+        else:
+            quote = quotes[product.id]
+            source_currency = price_list.currency_id
+            if display != source_currency:
+                quote = _convert_finished_quote(quote, source_currency, display, rates, snapshot, status, places)
+        if mode != PriceList.PricingMode.LEGACY and trader is not None and quote.available and not quote.overridden and quote.base_price is not None:
+            quote = _apply_trader_discount(quote, product, trader_rules, parents, places)
+        presented[product.id] = quote
+    return presented
+
+
+def _has_original(product):
+    return product.original_price is not None and product.original_currency_id in {"CNY", "USD", "ILS"}
+
+
+def _ancestor_chain(category_id, parents):
+    chain = []
+    seen = set()
+    current = category_id
+    while current and current not in seen:
+        seen.add(current)
+        chain.append(current)
+        current = parents.get(current)
+    return chain
+
+
+def _rate_context(source, target, rates, snapshot, status):
+    if source == target:
+        return Decimal("1"), "", True
+    if rates is None:
+        return None, "missing_exchange_rate", False
+    try:
+        factor = conversion_factor(rates, source, target)
+    except Exception:
+        return None, "missing_exchange_rate", False
+    allowed = checkout_allowed(status)
+    return factor, "" if allowed or status == "blocked" else "missing_exchange_rate", allowed or status == "blocked"
+
+
+def _original_quote(product, price_list, display, rates, snapshot, status, scope, overrides, places):
+    amount = product.original_price
+    source = product.original_currency_id
+    if product.id in overrides:
+        factor, error, allowed = _rate_context(price_list.currency_id, display, rates, snapshot, status)
+        if factor is None:
+            return PriceQuote(False, None, amount, source, None, None, "unavailable", error=error or "missing_exchange_rate", original_price=amount, original_currency=source, checkout_allowed=False, rate_status=status)
+        unit = quantize_money(overrides[product.id] * factor, places)
+        return PriceQuote(
+            True, unit, amount, source, None if factor == 1 else factor, None, "override",
+            calculated=None, overridden=True, original_price=amount, original_currency=source,
+            pricing_note="manual price", checkout_allowed=factor == 1 or status != "blocked", rate_status=status,
+        )
+    in_scope = scope is None or product.category_id in scope
+    percent = price_list.default_discount_percent if in_scope else Decimal("0")
+    factor, error, allowed = _rate_context(source, display, rates, snapshot, status)
+    if factor is None:
+        return PriceQuote(
+            False, None, amount, source, None, None, "unavailable",
+            error=error or "missing_exchange_rate", original_price=amount, original_currency=source,
+            checkout_allowed=False, rate_status=status,
+        )
+    raw = amount * factor
+    unit = quantize_money(raw * (HUNDRED - percent) / HUNDRED, places)
+    base = quantize_money(raw, places)
+    note = "price list discount" if in_scope and percent else "original price"
+    return PriceQuote(
+        True, unit, base, display, None if factor == 1 else factor, percent,
+        "discount" if in_scope and percent else "base",
+        product.category_id if in_scope and percent else None,
+        calculated=unit, original_price=amount, original_currency=source,
+        pricing_note=note, checkout_allowed=factor == 1 or status != "blocked", rate_status=status,
+    )
+
+
+def _convert_finished_quote(quote, source, target, rates, snapshot, status, places):
+    factor, error, allowed = _rate_context(source, target, rates, snapshot, status)
+    if factor is None or not quote.available or quote.unit_price is None:
+        return PriceQuote(
+            False, None, quote.base_price, quote.base_currency, None, quote.discount_percent, "unavailable",
+            error=error or quote.error or "missing_exchange_rate", checkout_allowed=False, rate_status=status,
+        )
+    return PriceQuote(
+        True,
+        quantize_money(quote.unit_price * factor, places),
+        None if quote.base_price is None else quantize_money(quote.base_price * factor, places),
+        target,
+        None if factor == 1 else factor,
+        quote.discount_percent,
+        quote.source,
+        quote.category_id,
+        calculated=None if quote.calculated is None else quantize_money(quote.calculated * factor, places),
+        overridden=quote.overridden,
+        original_price=quote.original_price,
+        original_currency=quote.original_currency,
+        pricing_note=quote.pricing_note,
+        checkout_allowed=factor == 1 or status != "blocked",
+        rate_status=status,
+    )
+
+
+def _apply_trader_discount(quote, product, rules, parents, places):
+    match = None
+    matched_category = None
+    for category_id in _ancestor_chain(product.category_id, parents):
+        if category_id in rules:
+            match = rules[category_id]
+            matched_category = category_id
+            break
+    if match is None or quote.base_price is None:
+        return quote
+    unit = quantize_money(quote.base_price * (HUNDRED - match) / HUNDRED, places)
+    return PriceQuote(
+        True, unit, quote.base_price, quote.base_currency, quote.exchange_rate, match, "trader_category",
+        matched_category, calculated=unit, overridden=False, original_price=quote.original_price,
+        original_currency=quote.original_currency, pricing_note="trader category discount",
+        checkout_allowed=quote.checkout_allowed, rate_status=quote.rate_status,
+    )
+
+
 def quote_payload(quote: PriceQuote, currency_code: str):
     places = 2
     return {
@@ -180,7 +332,7 @@ def quote_payload(quote: PriceQuote, currency_code: str):
         "overridden": quote.overridden,
         "base_price": _format(quote.base_price, places),
         "base_currency": quote.base_currency,
-        "exchange_rate": None,
+        "exchange_rate": None if quote.exchange_rate is None else f"{quote.exchange_rate:.8f}",
         "discount_percent": None if quote.discount_percent is None else f"{quote.discount_percent:.2f}",
         "rule_source": quote.source,
         "category_id": quote.category_id,

@@ -603,3 +603,46 @@ def _currency_data(data):
         data = dict(data)
         data["currency"] = data.pop("currency_code")
     return data
+
+
+class AdminFxSnapshotView(AdminAPIView):
+    def get(self, request):
+        from decimal import Decimal, ROUND_HALF_UP
+
+        from shop.fx import convert_amount, current_snapshot, ensure_store_currencies, snapshot_payload, snapshot_rates
+
+        ensure_store_currencies()
+        payload = snapshot_payload()
+        amount = request.query_params.get("amount")
+        currency = (request.query_params.get("currency") or "").upper()
+        if amount not in (None, "") or currency:
+            rates = snapshot_rates(current_snapshot())
+            if currency not in {"CNY", "USD", "ILS"}:
+                raise ValidationError({"currency": ["Choose CNY, USD or ILS."]})
+            try:
+                original = Decimal(str(amount))
+            except Exception as exc:
+                raise ValidationError({"amount": ["Enter an original price."]}) from exc
+            if original < 0:
+                raise ValidationError({"amount": ["Enter an original price of zero or more."]})
+            converted = {}
+            if rates is None:
+                payload["preview_error"] = "missing_exchange_rate"
+            else:
+                for code in ("CNY", "USD", "ILS"):
+                    value, _factor = convert_amount(original, currency, code, rates)
+                    converted[code] = f"{value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):.2f}"
+            payload["preview"] = {"original_currency": currency, "original_price": f"{original:.2f}", "prices": converted}
+        return Response(payload)
+
+
+class AdminFxRefreshView(AdminAPIView):
+    def post(self, request):
+        from shop.fx import refresh_exchange_rates, snapshot_payload
+
+        result = refresh_exchange_rates()
+        payload = snapshot_payload(result["snapshot"])
+        payload["refreshed"] = result["ok"]
+        payload["error"] = result["error"]
+        status = 200 if result["ok"] else 503
+        return Response(payload, status=status)

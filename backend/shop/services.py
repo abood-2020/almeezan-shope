@@ -28,6 +28,7 @@ from shop.models import (
     ProductSize,
     SiteSetting,
     Trader,
+    TraderCategoryDiscount,
 )
 from shop.pricing import PriceChangeRequired, compare_expected_price, parse_discount, quantize_money, quote_many
 
@@ -65,7 +66,7 @@ def login_trader(request, username, password):
 
 
 def catalog_products(trader=None):
-    queryset = Product.objects.select_related("category").prefetch_related(
+    queryset = Product.objects.select_related("category", "base_currency", "original_currency").prefetch_related(
         "images",
         "colors",
         "sizes",
@@ -85,14 +86,14 @@ def _line_error(index, message):
     raise ValidationError({"items": [f"Item {index + 1}: {message}"]})
 
 
-def prepare_order_lines(trader, items, acknowledge_price_changes=False):
+def prepare_order_lines(trader, items, acknowledge_price_changes=False, display_currency=None):
     if not items:
         raise ValidationError({"items": ["Add at least one product."]})
     products = []
     resolved = []
     for index, item in enumerate(items):
         try:
-            product = Product.objects.select_related("base_currency", "category").get(pk=item["product_id"])
+            product = Product.objects.select_related("base_currency", "original_currency", "category").get(pk=item["product_id"])
         except Product.DoesNotExist:
             _line_error(index, "Unknown product.")
         if not product.available:
@@ -109,7 +110,10 @@ def prepare_order_lines(trader, items, acknowledge_price_changes=False):
             _line_error(index, f"Minimum quantity is {product.min_qty}.")
         products.append(product)
         resolved.append((index, item, product, option.label, quantity))
-    quotes = quote_many(trader.price_list, products)
+    display = (display_currency or trader.price_list.currency_id).upper()
+    quotes = quote_many(trader.price_list, products, display_currency=display, trader=trader)
+    if any(not quote.checkout_allowed for quote in quotes.values()):
+        raise ValidationError({"display_currency": ["Exchange rates are too old to confirm a new order. Refresh the rates and try again."]})
     prepared = []
     changes = []
     for index, item, product, label, quantity in resolved:
@@ -125,7 +129,7 @@ def prepare_order_lines(trader, items, acknowledge_price_changes=False):
                 "option": label,
                 "previous": f"{Decimal(str(expected)):.2f}",
                 "current": f"{quote.unit_price:.2f}",
-                "currency_code": trader.price_list.currency_id,
+                "currency_code": display,
             })
         prepared.append((product, label, quantity, quote))
     if changes:
@@ -144,9 +148,21 @@ def allocate_order_number(day: date) -> str:
     return f"{prefix}{highest + 1}"
 
 
-def create_order(trader, note, items, acknowledge_price_changes=False):
-    prepared = prepare_order_lines(trader, items, acknowledge_price_changes)
-    currency = trader.price_list.currency
+def create_order(trader, note, items, acknowledge_price_changes=False, display_currency=None):
+    display = (display_currency or trader.price_list.currency_id).upper()
+    prepared = prepare_order_lines(trader, items, acknowledge_price_changes, display)
+    currency = Currency.objects.get(pk=display)
+    snapshot_id = None
+    provider = ""
+    provider_date = None
+    if any(quote.exchange_rate is not None for _product, _label, _quantity, quote in prepared):
+        from shop.fx import current_snapshot
+
+        snapshot = current_snapshot()
+        if snapshot is not None:
+            snapshot_id = snapshot.pk
+            provider = snapshot.provider
+            provider_date = snapshot.provider_date
     places = currency.decimal_places
     line_totals = []
     for product, label, quantity, quote in prepared:
@@ -169,6 +185,9 @@ def create_order(trader, note, items, acknowledge_price_changes=False):
                     status=Order.Status.REVIEW,
                     currency=currency,
                     currency_symbol=currency.symbol,
+                    rate_snapshot_id=snapshot_id,
+                    rate_provider=provider,
+                    rate_provider_date=provider_date,
                     note=note or "",
                     total=total,
                 )
@@ -188,8 +207,11 @@ def create_order(trader, note, items, acknowledge_price_changes=False):
                         unit_price=quote.unit_price,
                         base_price=quote.base_price,
                         base_currency=quote.base_currency,
+                        original_price=quote.original_price,
+                        original_currency=quote.original_currency,
                         discount_percent=quote.discount_percent,
                         exchange_rate=quote.exchange_rate,
+                        pricing_note=quote.pricing_note,
                         line_total=line_total,
                     )
                     for product, label, quantity, quote, line_total in line_totals
@@ -370,6 +392,8 @@ PRODUCT_FIELDS = (
     "base_price_ils",
     "base_price_usd",
     "base_currency",
+    "original_price",
+    "original_currency",
     "unit_ar",
     "unit_en",
     "min_qty",
@@ -388,6 +412,7 @@ def save_product(data, product=None):
         for field in PRODUCT_FIELDS:
             if field in data:
                 setattr(product, field, data[field])
+        _align_original_price(product, data)
         if "code" in data:
             product.code = data["code"].strip()
         try:
@@ -398,6 +423,28 @@ def save_product(data, product=None):
         _sync_choices(product, data, creating)
         _sync_image_keys(product, data)
         return _product_queryset().get(pk=product.pk)
+
+
+def _align_original_price(product, data):
+    """Keep the fixed original price authoritative without erasing a second legacy amount."""
+    if product.original_price is not None and product.original_currency_id:
+        product.price_review_required = False
+        if product.original_currency_id == "ILS":
+            product.base_price_ils = product.original_price
+            product.base_currency_id = product.base_currency_id or "ILS"
+        elif product.original_currency_id == "USD":
+            product.base_price_usd = product.original_price
+        elif product.original_currency_id not in {"CNY", "USD", "ILS"}:
+            raise ValidationError({"original_currency": ["Choose CNY, USD or ILS."]})
+        return
+    if "base_price_ils" in data and product.original_currency_id == "ILS":
+        product.original_price = product.base_price_ils
+    if "base_price_usd" in data and product.original_currency_id == "USD" and product.base_price_usd is not None:
+        product.original_price = product.base_price_usd
+    if product.original_price is None and product.base_price_usd is not None:
+        product.price_review_required = True
+    if product.base_price_ils is None:
+        product.base_price_ils = product.original_price if product.original_currency_id == "ILS" else Decimal("0")
 
 
 def _sync_choices(product, data, creating):
@@ -662,14 +709,33 @@ def save_trader(data, trader=None):
         user.save()
         if creating:
             trader = Trader(id=data["id"], user=user)
-        for field in ("name_ar", "name_en", "price_list"):
+        for field in ("name_ar", "name_en", "price_list", "phone", "country", "city"):
             if field in data:
                 setattr(trader, field, data[field])
         if "active" in data:
             trader.is_active = data["active"]
         trader.full_clean()
         trader.save()
+        if "category_discounts" in data:
+            _replace_trader_discounts(trader, data["category_discounts"])
         return Trader.objects.select_related("user", "price_list__currency").get(pk=trader.pk)
+
+
+def _replace_trader_discounts(trader, rows):
+    seen = set()
+    cleaned = []
+    for row in rows:
+        category = row["category"]
+        if category.id in seen:
+            raise ValidationError({"category_discounts": ["Each category can have only one discount."]})
+        seen.add(category.id)
+        percent = parse_discount(row["discount_percent"])
+        cleaned.append((category, percent))
+    TraderCategoryDiscount.objects.filter(trader=trader).delete()
+    TraderCategoryDiscount.objects.bulk_create([
+        TraderCategoryDiscount(trader=trader, category=category, discount_percent=percent)
+        for category, percent in cleaned
+    ])
 
 
 def set_trader_password(trader, password):
@@ -956,6 +1022,9 @@ def import_products(rows, lang="ar"):
     if errors:
         raise ValidationError({"rows": errors})
     created = []
+    from shop.fx import ensure_store_currencies
+
+    ensure_store_currencies()
     with transaction.atomic():
         for row in prepared:
             product = Product.objects.create(
@@ -964,6 +1033,8 @@ def import_products(rows, lang="ar"):
                 name_en=row["name_en"],
                 code=row["code"],
                 base_price_ils=row["base_price_ils"],
+                original_price=row["original_price"],
+                original_currency_id=row["original_currency_code"],
                 unit_ar=row["unit_ar"],
                 unit_en=row["unit_en"],
                 min_qty=row["min_qty"],
@@ -995,6 +1066,10 @@ _IMPORT_LABELS = {
     "base_price_ils": "Base_Price_ILS",
     "price_ils": "Base_Price_ILS",
     "السعر الأساسي (ils)": "Base_Price_ILS",
+    "original_currency": "Original_Currency",
+    "العملة الأصلية": "Original_Currency",
+    "original_price": "Original_Price",
+    "السعر الأصلي": "Original_Price",
     "available": "Available",
     "متاح": "Available",
     "description_ar": "Description_AR",
@@ -1063,17 +1138,69 @@ def _import_problems(row, seen, categories, english=True):
         minimum = _import_int(_import_cell(row, "Min_Qty", "min_qty"))
         if minimum < 1:
             problems.append(say("invalid minimum", "الحد الأدنى غير صالح"))
-    price_raw = _import_cell(row, "Base_Price_ILS", "Price_ILS", "base_price_ils")
-    try:
-        price = Decimal(str(price_raw))
-        if price < 0:
-            problems.append(say("invalid price", "سعر غير صالح"))
-    except (InvalidOperation, TypeError):
-        problems.append(say("invalid price", "سعر غير صالح"))
+    price_problems = _import_price_problems(row, say)
+    problems.extend(price_problems)
     available = _import_cell(row, "Available", "available")
     if str(available) not in {"0", "1"}:
         problems.append(say("Available must be 0 or 1", "متاح يجب أن يكون 0 أو 1"))
     return problems
+
+
+def _import_price_problems(row, say):
+    from decimal import InvalidOperation
+
+    original_currency = _import_cell(row, "Original_Currency")
+    original_price = _import_cell(row, "Original_Price")
+    legacy = _import_cell(row, "Base_Price_ILS", "Price_ILS", "base_price_ils")
+    has_original = original_currency not in (None, "") or original_price not in (None, "")
+    has_legacy = legacy not in (None, "")
+    if not has_original and not has_legacy:
+        return [say("invalid price", "سعر غير صالح")]
+    problems = []
+    legacy_amount = None
+    if has_legacy:
+        try:
+            legacy_amount = Decimal(str(legacy))
+            if legacy_amount < 0:
+                problems.append(say("invalid price", "سعر غير صالح"))
+        except (InvalidOperation, TypeError):
+            problems.append(say("invalid price", "سعر غير صالح"))
+    if has_original:
+        code = str(original_currency or "").strip().upper()
+        if code not in {"CNY", "USD", "ILS"} or original_price in (None, ""):
+            problems.append(say("invalid original price", "السعر الأصلي أو عملته غير صالحة"))
+        else:
+            try:
+                amount = Decimal(str(original_price))
+                if amount < 0:
+                    problems.append(say("invalid original price", "السعر الأصلي أو عملته غير صالحة"))
+            except (InvalidOperation, TypeError):
+                problems.append(say("invalid original price", "السعر الأصلي أو عملته غير صالحة"))
+                amount = None
+            if amount is not None and has_legacy and legacy_amount is not None and code != "ILS":
+                problems.append(say(
+                    "ambiguous price columns",
+                    "لا تجمع السعر الأصلي بعملة غير الشيكل مع السعر الأساسي بالشيكل",
+                ))
+            if amount is not None and has_legacy and legacy_amount is not None and code == "ILS" and amount != legacy_amount:
+                problems.append(say(
+                    "ambiguous price columns",
+                    "السعر الأصلي لا يطابق السعر الأساسي بالشيكل",
+                ))
+    return problems
+
+
+def _resolved_import_price(row):
+    original_currency = _import_cell(row, "Original_Currency")
+    original_price = _import_cell(row, "Original_Price")
+    legacy = _import_cell(row, "Base_Price_ILS", "Price_ILS", "base_price_ils")
+    if original_currency not in (None, "") and original_price not in (None, ""):
+        code = str(original_currency).strip().upper()
+        amount = Decimal(str(original_price))
+        base = amount if code == "ILS" else (Decimal(str(legacy)) if legacy not in (None, "") else Decimal("0"))
+        return code, amount, base
+    amount = Decimal(str(legacy))
+    return "ILS", amount, amount
 
 
 def _import_int(value):
@@ -1098,7 +1225,9 @@ def _normalized_import_row(row, code):
         "unit_ar": str(_import_cell(row, "Unit_AR", "unit_ar")).strip(),
         "unit_en": str(_import_cell(row, "Unit_EN", "unit_en")).strip(),
         "min_qty": _import_int(_import_cell(row, "Min_Qty", "min_qty")),
-        "base_price_ils": Decimal(str(_import_cell(row, "Base_Price_ILS", "Price_ILS", "base_price_ils"))),
+        "original_currency_code": _resolved_import_price(row)[0],
+        "original_price": _resolved_import_price(row)[1],
+        "base_price_ils": _resolved_import_price(row)[2],
         "available": str(_import_cell(row, "Available", "available")) == "1",
         "description_ar": str(row.get("Description_AR") or row.get("description_ar") or "").strip(),
         "description_en": str(row.get("Description_EN") or row.get("description_en") or "").strip(),

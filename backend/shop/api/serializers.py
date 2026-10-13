@@ -32,6 +32,7 @@ class OrderItemInputSerializer(serializers.Serializer):
 class OrderCreateSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True, default="")
     acknowledge_price_changes = serializers.BooleanField(required=False, default=False)
+    display_currency = serializers.ChoiceField(choices=["CNY", "USD", "ILS"], required=False)
     items = serializers.ListField(child=OrderItemInputSerializer(), allow_empty=False)
 
 
@@ -105,6 +106,10 @@ def trader_payload(trader):
         "phone": trader.phone,
         "country": trader.country,
         "city": trader.city,
+        "category_discounts": [
+            {"category_id": row.category_id, "discount_percent": f"{row.discount_percent:.2f}"}
+            for row in trader.category_discounts.all()
+        ],
         "active": trader.is_active,
         "price_list": {
             "id": price_list.id,
@@ -188,7 +193,7 @@ def category_payload(category):
     }
 
 
-def product_payload(product, price_list=None, quote=None):
+def product_payload(product, price_list=None, quote=None, display_currency=None):
     images = list(product.images.all())
     primary = next((image for image in images if image.is_primary), None)
     if primary is None and images:
@@ -227,8 +232,12 @@ def product_payload(product, price_list=None, quote=None):
 
             quote = quote_many(price_list, [product])[product.id]
         data["price"] = money(quote.unit_price) if quote.available else None
-        data["currency_code"] = price_list.currency_id
-        data["currency_symbol"] = price_list.currency.symbol
+        if display_currency is not None:
+            data["currency_code"] = display_currency.code
+            data["currency_symbol"] = display_currency.symbol
+        else:
+            data["currency_code"] = price_list.currency_id
+            data["currency_symbol"] = price_list.currency.symbol
         if not quote.available:
             data["price_error"] = quote.error or "missing_price"
     return data

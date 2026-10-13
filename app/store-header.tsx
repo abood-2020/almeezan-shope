@@ -4,8 +4,9 @@ import {ChevronDown,Globe2,LayoutDashboard,Menu,ShoppingBag,UserRound,X} from 'l
 import {Sheet,SheetContent,SheetTitle,SheetDescription,SheetTrigger,SheetClose} from '@/components/ui/sheet';
 import {catalogHref,type CatalogGroup} from './catalog-navigation';
 
-type Props={lang:'ar'|'en';page:string;category:number;subcategory:string;groups:CatalogGroup[];logo:ReactNode;labels?:Record<string,string>;brandName?:string;accountLabel:string;cartCount:number;adminLabel?:string;onLanguage:()=>void;onAccount:()=>void;onAdmin?:()=>void;onNavigate:(page:string)=>void;onCatalog:(category?:number,subcategory?:string)=>void};
-export default function StoreHeader({lang,page,category,subcategory,groups,logo,labels,brandName,accountLabel,cartCount,adminLabel,onLanguage,onAccount,onAdmin,onNavigate,onCatalog}:Props){
+type DisplayCurrency='USD'|'ILS'|'CNY';
+type Props={lang:'ar'|'en';page:string;category:number;subcategory:string;groups:CatalogGroup[];logo:ReactNode;labels?:Record<string,string>;brandName?:string;accountLabel:string;cartCount:number;adminLabel?:string;displayCurrency?:DisplayCurrency;onCurrency?:(code:DisplayCurrency)=>void;onLanguage:()=>void;onAccount:()=>void;onAdmin?:()=>void;onNavigate:(page:string)=>void;onCatalog:(category?:number,subcategory?:string)=>void};
+export default function StoreHeader({lang,page,category,subcategory,groups,logo,labels,brandName,accountLabel,cartCount,adminLabel,displayCurrency,onCurrency,onLanguage,onAccount,onAdmin,onNavigate,onCatalog}:Props){
   const en=lang==='en';const t=(ar:string,eng:string)=>en?eng:ar;const nav=(key:string,ar:string,eng:string)=>{const value=labels?.[en?key+'_en':key+'_ar'];return value?.trim()?value:t(ar,eng)};const brand=brandName||t('رواق','Riwaq');
   const [mega,setMega]=useState(false);const [mobile,setMobile]=useState(false);
   const area=useRef<HTMLDivElement>(null);const trigger=useRef<HTMLButtonElement>(null);
@@ -27,6 +28,8 @@ export default function StoreHeader({lang,page,category,subcategory,groups,logo,
   const routes=[{id:'home',key:'home',ar:'الرئيسية',en:'Home'},{id:'traders',key:'traders',ar:'التجار',en:'Traders'},{id:'export',key:'export',ar:'التصدير',en:'Export'},{id:'info',key:'about',ar:'من نحن',en:'About us'},{id:'contact',key:'contact',ar:'تواصل معنا',en:'Contact us'}];
   const pageLink=(route:typeof routes[number],mobileLink=false)=><a key={route.id} href={'#'+route.id} className={page===route.id?(mobileLink?'active':'nav-active'):''} aria-current={page===route.id?'page':undefined} onClick={e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();navigate(route.id)}}>{nav(route.key,route.ar,route.en)}</a>;
   const catalogLink=(id:number,sub:string,label:string,className='')=><a href={catalogHref(id,sub)} className={className} aria-current={page==='products'&&category===id&&subcategory===sub?'page':undefined} onClick={e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();catalog(id,sub)}}>{label}</a>;
+  const currencyChoices:DisplayCurrency[]=['USD','ILS','CNY'];
+  const currencyControl=onCurrency?<label className="currency-switch"><span className="sr-only">{t('عملة العرض','Display currency')}</span><select aria-label={t('عملة العرض','Display currency')} value={displayCurrency||'USD'} onChange={event=>onCurrency(event.target.value as DisplayCurrency)}>{currencyChoices.map(code=><option key={code} value={code}>{code}</option>)}</select></label>:null;
   return <Sheet open={mobile} onOpenChange={setMobile}>
     <header className={'site-header organized-header '+(page==='home'?'home-header':'')}>
       <div className="header-bar wrap">
@@ -42,7 +45,7 @@ export default function StoreHeader({lang,page,category,subcategory,groups,logo,
           </div>
           {routes.slice(1).map(route=>pageLink(route))}
         </nav>
-        <div className="header-actions"><button className="lang-btn" type="button" onClick={onLanguage} aria-label={t('التبديل إلى الإنجليزية','Switch to Arabic')}><Globe2 size={18}/><span>{en?'العربية':'English'}</span></button><span className="divider"/>{onAdmin?<button className="account-btn admin-entry" type="button" onClick={()=>{close();setMobile(false);onAdmin()}}><LayoutDashboard size={20}/><span>{adminLabel}</span></button>:<button className="account-btn" type="button" onClick={onAccount}><UserRound size={20}/><span>{accountLabel}</span></button>}<button className="cart-btn" type="button" onClick={()=>navigate('cart')} aria-label={t('السلة','Cart')}><ShoppingBag size={20}/><span>{t('السلة','Cart')}</span><b>{cartCount}</b></button><SheetTrigger asChild><button type="button" className="mobile-menu-trigger" aria-label={t('فتح القائمة','Open menu')} aria-controls="mobile-store-menu"><Menu size={21}/></button></SheetTrigger></div>
+        <div className="header-actions">{currencyControl}<button className="lang-btn" type="button" onClick={onLanguage} aria-label={t('التبديل إلى الإنجليزية','Switch to Arabic')}><Globe2 size={18}/><span>{en?'العربية':'English'}</span></button><span className="divider"/>{onAdmin?<button className="account-btn admin-entry" type="button" onClick={()=>{close();setMobile(false);onAdmin()}}><LayoutDashboard size={20}/><span>{adminLabel}</span></button>:<button className="account-btn" type="button" onClick={onAccount}><UserRound size={20}/><span>{accountLabel}</span></button>}<button className="cart-btn" type="button" onClick={()=>navigate('cart')} aria-label={t('السلة','Cart')}><ShoppingBag size={20}/><span>{t('السلة','Cart')}</span><b>{cartCount}</b></button><SheetTrigger asChild><button type="button" className="mobile-menu-trigger" aria-label={t('فتح القائمة','Open menu')} aria-controls="mobile-store-menu"><Menu size={21}/></button></SheetTrigger></div>
       </div>
     </header>
     <SheetContent id="mobile-store-menu" side="left" showCloseButton={false} className="mobile-store-sheet organized-mobile" dir={en?'ltr':'rtl'}>
@@ -55,6 +58,7 @@ export default function StoreHeader({lang,page,category,subcategory,groups,logo,
         <span className="mobile-menu-label">{t('حسابك وطلباتك','Your account & orders')}</span>{onAdmin?<button type="button" onClick={()=>{setMobile(false);onAdmin()}}>{adminLabel}</button>:<button type="button" onClick={()=>{setMobile(false);onAccount()}}>{accountLabel}</button>}<button type="button" onClick={()=>navigate('cart')}>{nav('cart','سلة الطلب','Order cart')}<bdi className="mobile-cart-count">{cartCount}</bdi></button><a href="#info" onClick={e=>{e.preventDefault();navigate('info')}}>{t('معلومات الطلب والأسئلة الشائعة','Ordering information & FAQ')}</a>
       </nav>
       <button type="button" className="mobile-menu-language" onClick={onLanguage}><Globe2 size={18}/>{en?'العربية':'English'}</button>
+      {currencyControl}
     </SheetContent>
   </Sheet>;
 }

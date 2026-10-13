@@ -27,6 +27,9 @@ export type ApiProduct = {
   price?: string | null;
   base_price_ils?: string;
   base_price_usd?: string | null;
+  original_price?: string | null;
+  original_currency?: string | null;
+  price_review_required?: boolean;
   images?: ApiImage[];
 };
 export type ApiTrader = {
@@ -35,6 +38,10 @@ export type ApiTrader = {
   name_ar: string;
   name_en: string;
   email: string;
+  phone?: string;
+  country?: string;
+  city?: string;
+  category_discounts?: {category_id: number; discount_percent: string}[];
   active: boolean;
   price_list: {id: string; name_ar: string; name_en: string; currency_code: string; currency_symbol: string};
 };
@@ -68,7 +75,7 @@ export type ApiPriceList = {
 };
 export type ApiCurrency = {code: string; name: string; symbol: string};
 export type UiCategory = {id?: number; ar: string; en: string; img?: string; parentId?: number | null; level?: number};
-export type UiTrader = {id: string; ar: string; en: string; username: string; email: string; list: string; active: boolean};
+export type UiTrader = {id: string; ar: string; en: string; username: string; email: string; phone: string; country: string; city: string; list: string; active: boolean; discounts: {category_id: number; discount_percent: string}[]};
 export type UiCurrency = {id: string; name: string; symbol: string};
 export type UiInvoice = {id: string; date: string; merchant: string; amount: number; url: string; name: string};
 
@@ -108,7 +115,11 @@ export function productFromApi(row: ApiProduct, categories: UiCategory[], useBas
     code: row.code,
     cat: categoryIndex > 0 ? categoryIndex : 1,
     price: source == null || source === "" ? Number.NaN : Number(source),
+    sellingPrice: row.price == null || row.price === "" ? Number.NaN : Number(row.price),
     usdPrice: row.base_price_usd == null || row.base_price_usd === "" ? null : Number(row.base_price_usd),
+    originalCurrency: row.original_currency === "CNY" || row.original_currency === "USD" || row.original_currency === "ILS" ? row.original_currency : undefined,
+    originalPrice: row.original_price == null || row.original_price === "" ? null : Number(row.original_price),
+    priceReview: !!row.price_review_required,
     unit: row.unit_ar,
     unitEn: row.unit_en,
     min: row.min_qty,
@@ -150,8 +161,12 @@ export function traderFromApi(trader: ApiTrader): UiTrader {
     en: trader.name_en,
     username: trader.username,
     email: trader.email,
+    phone: trader.phone || "",
+    country: trader.country || "",
+    city: trader.city || "",
     list: trader.price_list.id,
     active: trader.active,
+    discounts: trader.category_discounts || [],
   };
 }
 
@@ -223,13 +238,17 @@ export function currencyFromApi(row: ApiCurrency): UiCurrency {
 }
 
 export function productWriteBody(product: Product, categoryId: number) {
+  const currency = product.originalCurrency || "CNY";
+  const original = typeof product.originalPrice === "number" && Number.isFinite(product.originalPrice) ? product.originalPrice.toFixed(2) : "0.00";
   return {
     name_ar: product.ar,
     name_en: product.en,
     code: product.code,
     category_id: categoryId,
-    base_price_ils: Number.isFinite(product.price) ? product.price.toFixed(2) : "0.00",
-    base_price_usd: product.usdPrice == null || !Number.isFinite(product.usdPrice) ? null : product.usdPrice.toFixed(2),
+    original_price: original,
+    original_currency: currency,
+    base_price_ils: currency === "ILS" ? original : (Number.isFinite(product.price) ? product.price.toFixed(2) : "0.00"),
+    base_price_usd: currency === "USD" ? original : (product.usdPrice == null || !Number.isFinite(product.usdPrice) ? null : product.usdPrice.toFixed(2)),
     unit_ar: product.unit,
     unit_en: product.unitEn,
     min_qty: product.min,

@@ -217,6 +217,8 @@ def _items_sheet(ws, order, english, brand):
         ("نسبة الخصم", "Discount %"),
         ("سعر الوحدة", "Unit Price"),
         ("إجمالي السطر", "Line Total"),
+        ("العملة الأصلية", "Original Currency"),
+        ("السعر الأصلي", "Original Price"),
     ]
     titles = [en if english else ar for ar, en in columns]
     _write_title(ws, f"{brand} — {order.number}", len(titles))
@@ -242,6 +244,8 @@ def _items_sheet(ws, order, english, brand):
             line.discount_percent,
             line.unit_price,
             _line_total(line),
+            line.original_currency,
+            line.original_price,
         ]
         for column, value in enumerate(values, start=1):
             cell = ws.cell(row, column)
@@ -251,7 +255,7 @@ def _items_sheet(ws, order, english, brand):
             if column in {1, 9}:
                 cell.value = int(value or 0)
                 cell.number_format = "0"
-            elif column in {10, 12, 13}:
+            elif column in {10, 12, 13, 15}:
                 _money(cell, value)
             elif column == 11:
                 if value is None:
@@ -274,7 +278,7 @@ def _items_sheet(ws, order, english, brand):
     amount.fill = TOTAL_FILL
     amount.border = THIN
     _money(amount, order.total)
-    _widths(ws, (8, 18, 16, 36, 28, 18, 12, 14, 12, 18, 14, 16, 16))
+    _widths(ws, (8, 18, 16, 36, 28, 18, 12, 14, 12, 18, 14, 16, 16, 16, 16))
     ws.auto_filter.ref = f"A2:{get_column_letter(len(titles))}{max(total_row - 1, 2)}"
     ws.oddFooter.center.text = sheet_text(brand)
 

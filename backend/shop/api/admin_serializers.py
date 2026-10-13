@@ -26,6 +26,12 @@ class ProductWriteSerializer(serializers.Serializer):
     base_price_usd = serializers.DecimalField(
         max_digits=10, decimal_places=2, min_value=Decimal("0"), required=False, allow_null=True
     )
+    original_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal("0"), required=False
+    )
+    original_currency = serializers.PrimaryKeyRelatedField(
+        queryset=Currency.objects.all(), required=False
+    )
     base_currency_code = serializers.PrimaryKeyRelatedField(
         queryset=Currency.objects.all(), source="base_currency", required=False
     )
@@ -51,13 +57,22 @@ class ProductWriteSerializer(serializers.Serializer):
                 "name_en",
                 "code",
                 "category_id",
-                "base_price_ils",
                 "unit_ar",
                 "unit_en",
                 "min_qty",
                 "available",
             ):
                 self.fields[name].required = True
+
+    def validate(self, attrs):
+        has_original = "original_price" in attrs or "original_currency" in attrs
+        if has_original and ("original_price" not in attrs or "original_currency" not in attrs):
+            raise serializers.ValidationError({"original_price": "Enter both the original price and its currency."})
+        if "original_currency" in attrs and attrs["original_currency"].code not in {"CNY", "USD", "ILS"}:
+            raise serializers.ValidationError({"original_currency": "Choose CNY, USD or ILS."})
+        if not self.partial and "original_price" not in attrs and "base_price_ils" not in attrs:
+            raise serializers.ValidationError({"original_price": "Enter an original price."})
+        return attrs
 
 
 class ParentIdField(serializers.Field):
@@ -97,7 +112,38 @@ class TraderWriteSerializer(serializers.Serializer):
         queryset=PriceList.objects.all(), source="price_list", required=False
     )
     active = serializers.BooleanField(required=False)
+    phone = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    country = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    city = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    category_discounts = serializers.ListField(child=serializers.DictField(), required=False)
     password = serializers.CharField(required=False, write_only=True, trim_whitespace=False)
+
+    def validate_phone(self, value):
+        from shop.content import normalize_phone
+
+        return normalize_phone(value, "phone")
+
+    def validate_country(self, value):
+        from shop.content import plain
+
+        return plain(value, "country", 80).strip()
+
+    def validate_city(self, value):
+        from shop.content import plain
+
+        return plain(value, "city", 80).strip()
+
+    def validate_category_discounts(self, rows):
+        cleaned = []
+        for row in rows:
+            if "category_id" not in row or "discount_percent" not in row:
+                raise serializers.ValidationError("Each discount needs a category and a percentage.")
+            try:
+                category = Category.objects.get(pk=row["category_id"])
+            except (Category.DoesNotExist, TypeError, ValueError) as exc:
+                raise serializers.ValidationError("Choose an existing category.") from exc
+            cleaned.append({"category": category, "discount_percent": row["discount_percent"]})
+        return cleaned
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -263,6 +309,9 @@ def admin_product_payload(product):
     data["base_price_ils"] = money(product.base_price_ils)
     data["base_price_usd"] = money(product.base_price_usd)
     data["base_currency"] = product.base_currency_id
+    data["original_price"] = money(product.original_price)
+    data["original_currency"] = product.original_currency_id
+    data["price_review_required"] = product.price_review_required
     data["images"] = [
         {
             "id": image.id,

@@ -29,6 +29,7 @@ from shop.services import (
     catalog_products,
     complete_google_profile,
     create_order,
+    default_price_list,
     get_active_trader,
     get_site_settings,
     google_profile_required,
@@ -128,12 +129,44 @@ class CategoryListView(APIView):
         return Response(category_payloads(Category.objects.all()))
 
 
+def _requested_currency(request):
+    raw = (request.query_params.get("currency") or "").strip().upper()
+    if not raw:
+        return None
+    if raw not in {"CNY", "USD", "ILS"}:
+        return False
+    from shop.models import Currency
+
+    currency = Currency.objects.filter(pk=raw).first()
+    return currency or False
+
+
+def _catalog_pricing(user):
+    """Public prices use the default list. Only the signed-in trader's own row can discount them."""
+    if getattr(user, "is_authenticated", False) and getattr(user, "is_staff", False):
+        return default_price_list(), None
+    trader = get_active_trader(user)
+    if trader is not None:
+        return trader.price_list, trader
+    return default_price_list(), None
+
+
+def _catalog_display(request, public):
+    display = _requested_currency(request)
+    if display is False or not public:
+        return display
+    if display is not None:
+        return display
+    from shop.models import Currency
+
+    return Currency.objects.filter(pk="USD").first() or False
+
+
 class ProductListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        trader = get_active_trader(request.user)
-        price_list = trader.price_list if trader else None
+        price_list, trader = _catalog_pricing(request.user)
         products = list(catalog_products(trader))
         selected = request.query_params.get("category")
         if selected not in (None, ""):
@@ -145,9 +178,14 @@ class ProductListView(APIView):
                 return Response({"detail": "Not found."}, status=404)
             allowed = set(category_descendant_ids(category_id))
             products = [product for product in products if product.category_id in allowed]
-        quotes = quote_many(price_list, products) if price_list is not None else {}
+        display = _catalog_display(request, trader is None)
+        if display is False:
+            return Response({"detail": "Unsupported currency."}, status=400)
+        quotes = quote_many(
+            price_list, products, display_currency=None if display is None else display.code, trader=trader
+        ) if price_list is not None else {}
         return Response([
-            product_payload(product, price_list, quotes.get(product.id))
+            product_payload(product, price_list, quotes.get(product.id), display)
             for product in products
         ])
 
@@ -156,12 +194,19 @@ class ProductDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, product_id):
-        trader = get_active_trader(request.user)
-        price_list = trader.price_list if trader else None
+        price_list, trader = _catalog_pricing(request.user)
         product = catalog_products(trader).filter(pk=product_id).first()
         if product is None:
             return Response({"detail": "Not found."}, status=404)
-        return Response(product_payload(product, price_list))
+        display = _catalog_display(request, trader is None)
+        if display is False:
+            return Response({"detail": "Unsupported currency."}, status=400)
+        quote = None
+        if price_list is not None:
+            quote = quote_many(
+                price_list, [product], display_currency=None if display is None else display.code, trader=trader
+            )[product.id]
+        return Response(product_payload(product, price_list, quote, display))
 
 
 class CurrentPricingView(APIView):
@@ -171,13 +216,18 @@ class CurrentPricingView(APIView):
         trader = get_active_trader(request.user)
         price_list = trader.price_list
         products = list(catalog_products(trader))
-        quotes = quote_many(price_list, products)
+        display = _requested_currency(request)
+        if display is False:
+            return Response({"detail": "Unsupported currency."}, status=400)
+        quotes = quote_many(price_list, products, display_currency=None if display is None else display.code, trader=trader)
+        shown = display or price_list.currency
         return Response({
             "id": price_list.id,
             "name_ar": price_list.name_ar,
             "name_en": price_list.name_en,
-            "currency_code": price_list.currency_id,
-            "currency_symbol": price_list.currency.symbol,
+            "currency_code": shown.code,
+            "currency_symbol": shown.symbol,
+            "list_currency_code": price_list.currency_id,
             "pricing_mode": price_list.pricing_mode,
             "default_discount_percent": f"{price_list.default_discount_percent:.2f}",
             "prices": [
@@ -214,6 +264,7 @@ class OrderListCreateView(APIView):
                 serializer.validated_data.get("note", ""),
                 serializer.validated_data["items"],
                 serializer.validated_data.get("acknowledge_price_changes", False),
+                serializer.validated_data.get("display_currency"),
             )
         except PriceChangeRequired as exc:
             return Response({"price_changed": True, "items": exc.items}, status=409)

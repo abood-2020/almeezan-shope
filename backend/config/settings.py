@@ -172,6 +172,12 @@ SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", default=False)
 if USE_HTTPS:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# Frankfurter publishes official reference rates. The app asks again every 12 hours.
+FX_PROVIDER_URL = os.environ.get("FX_PROVIDER_URL", "https://api.frankfurter.dev/v1/latest")
+FX_TIMEOUT_SECONDS = float(os.environ.get("FX_TIMEOUT_SECONDS", "10"))
+FX_STALE_DAYS = int(os.environ.get("FX_STALE_DAYS", "5"))
+FX_CHECKOUT_MAX_AGE_DAYS = int(os.environ.get("FX_CHECKOUT_MAX_AGE_DAYS", "10"))
+
 # HSTS is not implied by production mode. Enable it only after HTTPS is confirmed.
 _hsts_seconds = os.environ.get("SECURE_HSTS_SECONDS", "").strip()
 if USE_HTTPS and _hsts_seconds.isdigit() and int(_hsts_seconds) > 0:
