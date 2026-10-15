@@ -10,7 +10,6 @@ export const PRODUCT_TEMPLATE_FIELDS = [
   {key: 'Min_Qty', ar: 'الحد الأدنى للكمية', sample: 6},
   {key: 'Original_Currency', ar: 'العملة الأصلية', sample: 'CNY'},
   {key: 'Original_Price', ar: 'السعر الأصلي', sample: 100},
-  {key: 'Base_Price_ILS', ar: 'السعر الأساسي (ILS)', sample: ''},
   {key: 'Available', ar: 'متاح', sample: 1},
   {key: 'Description_AR', ar: 'الوصف (عربي)', sample: 'وصف المنتج'},
   {key: 'Description_EN', ar: 'الوصف (إنجليزي)', sample: 'Product description'},

@@ -238,6 +238,13 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .category-picker>.field-label{margin:0;font-size:12px;line-height:1.3;color:#6d5c66}
 .category-picker-trigger{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;height:42px;min-height:42px;max-height:42px;padding:0 12px;border:1px solid #e0d4dc;border-radius:8px;background:#fff;color:#302a30;font:inherit;font-size:14px;line-height:1.2;text-align:start;cursor:pointer}
 .category-picker-trigger>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.category-trail{display:flex;flex-wrap:wrap;align-items:center;gap:4px 2px;min-width:0;line-height:1.35}
+.category-trail-step{display:inline-flex;align-items:center;gap:4px;min-width:0}
+.category-trail-parent{color:#6d5c66;font-size:12px;font-weight:650;padding:1px 8px;border-radius:999px;background:#f3eef1}
+.category-trail-leaf{color:#2d2730;font-size:15px;font-weight:750}
+.category-trail-sep{flex:none;color:#b41f71}
+.category-picker.trail .category-picker-trigger{height:auto;min-height:46px;max-height:none;padding-block:8px}
+.category-picker.trail .category-trail{flex:1;flex-wrap:nowrap}
 .category-picker.open .category-picker-trigger,.category-picker-trigger:focus-visible{border-color:#b41f71;box-shadow:0 0 0 3px #b41f7118}
 .category-picker-panel{position:fixed;z-index:80;pointer-events:auto;display:flex;flex-direction:column;gap:6px;box-sizing:border-box;padding:8px;background:#fff;border:1px solid #eadfe6;border-radius:10px;box-shadow:0 12px 28px #2d202b24;overflow:hidden}
 .category-picker-search{display:flex;align-items:center;gap:6px;height:34px;min-height:34px;margin:0;padding:0 8px;border:1px solid #eadfe6;border-radius:7px;background:#fbf8fa;color:#8a7882}
@@ -375,4 +382,42 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .editor-dialog.trader-editor{width:calc(100vw - 16px)!important;max-width:calc(100vw - 16px)!important}
 .trader-editor .trader-editor-footer{flex-direction:column;align-items:stretch}
 .trader-editor .trader-editor-footer .btn{width:100%}
+}
+.trader-form-page{display:flex;flex-direction:column;gap:22px;max-width:1100px}
+.trader-form-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+.trader-form-header h2{margin:6px 0}
+.trader-form-actions{display:flex;gap:10px;flex-wrap:wrap}
+.trader-form-section h3,.fx-history h3{margin-bottom:12px}
+.trader-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.trader-form-grid .field-label{display:flex;flex-direction:column;gap:6px}
+.trader-form-grid select{height:46px;border:1px solid #dce2df;border-radius:7px;padding:0 12px;background:#fff}
+.trader-active{align-self:end;min-height:46px}
+.discount-add{display:grid;width:100%;grid-template-columns:160px auto minmax(0,1fr);grid-template-areas:"category category category" "percent button .";gap:12px 10px;align-items:end;margin:14px 0 8px;padding:14px;border:1px solid #eadfe6;border-radius:12px;background:#fbf8fa}
+.discount-add .category-picker{grid-area:category}
+.discount-add>.field-label{grid-area:percent;margin:0;display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:1.3;color:#6d5c66}
+.discount-add>.field-label input{height:46px;width:140px}
+.discount-add-button{grid-area:button;height:46px}
+.discount-message{margin:0 0 8px;color:#a0244e;font-size:13px;font-weight:700}
+.discount-rules table,.fx-history-table table{width:100%;border-collapse:collapse}
+.discount-rules th,.discount-rules td,.fx-history-table th,.fx-history-table td{padding:12px 14px;border-bottom:1px solid #eadfe6;text-align:start;vertical-align:middle}
+.discount-rules th,.fx-history-table th{font-size:13px;color:#6d5b66;background:#fbf8fa}
+.discount-rules th:first-child,.discount-rules td.discount-category{width:46%}
+.discount-percent{width:120px;white-space:nowrap}
+.discount-pill{display:inline-flex;justify-content:center;min-width:72px;padding:2px 10px;border-radius:999px;background:#f8eaf2;color:#b41f71;font-weight:750}
+.discount-actions{display:flex;gap:12px;align-items:center;white-space:nowrap}
+.discount-rules input{width:96px;height:38px}
+.fx-history{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+.fx-filters{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+.fx-filters label{display:flex;flex-direction:column;gap:4px;font-size:13px}
+.fx-pager{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.fx-pager div{display:flex;gap:8px;align-items:center}
+@media(max-width:760px){
+.trader-form-header,.trader-form-grid{grid-template-columns:1fr}
+.discount-add{grid-template-columns:1fr;grid-template-areas:"category" "percent" "button"}
+.discount-add-button,.discount-add>.field-label input{width:100%}
+.category-picker.trail .category-trail{flex-wrap:wrap}
+.trader-form-header{flex-direction:column}
+.discount-actions{white-space:normal}
+.fx-history-table{overflow-x:auto}
+.fx-history-table table{min-width:640px}
 }

@@ -636,6 +636,57 @@ class AdminFxSnapshotView(AdminAPIView):
         return Response(payload)
 
 
+class AdminFxHistoryView(AdminAPIView):
+    def get(self, request):
+        from datetime import date
+
+        from shop.fx import FxError, observation_history
+        from shop.models import RateObservation
+
+        def parse_date(field):
+            raw = request.query_params.get(field)
+            if raw in (None, ""):
+                return None
+            try:
+                return date.fromisoformat(raw)
+            except ValueError as exc:
+                raise ValidationError({field: ["Enter a date as YYYY-MM-DD."]}) from exc
+
+        start = parse_date("from") or date(2026, 1, 1)
+        latest = RateObservation.objects.order_by("-provider_date").values_list("provider_date", flat=True).first()
+        end = parse_date("to") or latest or date.today()
+        exact = parse_date("date")
+        if start > end:
+            raise ValidationError({"from": ["From date cannot be after to date."]})
+        raw_page = request.query_params.get("page") or "1"
+        try:
+            page = int(raw_page)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({"page": ["Enter a page number."]}) from exc
+        try:
+            history = observation_history(start=start, end=end, exact=exact, page=page)
+        except FxError as exc:
+            raise ValidationError({"page": ["That page is outside the result set."]}) from exc
+        return Response({
+            "count": history["count"],
+            "page": history["page"],
+            "page_size": history["page_size"],
+            "pages": history["pages"],
+            "from": history["start"].isoformat(),
+            "to": history["end"].isoformat(),
+            "results": [
+                {
+                    "date": row.provider_date.isoformat(),
+                    "usd_cny": f"{row.cny_per_usd:.8f}",
+                    "usd_ils": f"{row.ils_per_usd:.8f}",
+                    "provider": "Frankfurter" if row.provider == "frankfurter" else row.provider,
+                    "fetched_at": row.fetched_at.isoformat(),
+                }
+                for row in history["results"]
+            ],
+        })
+
+
 class AdminFxRefreshView(AdminAPIView):
     def post(self, request):
         from shop.fx import refresh_exchange_rates, snapshot_payload

@@ -520,6 +520,30 @@ class FxRefreshLock(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class RateObservation(models.Model):
+    """One published USD rate date. Pricing snapshots and order history stay separate."""
+
+    provider = models.CharField(max_length=40, default="frankfurter")
+    provider_date = models.DateField()
+    fetched_at = models.DateTimeField()
+    cny_per_usd = models.DecimalField(max_digits=18, decimal_places=8)
+    ils_per_usd = models.DecimalField(max_digits=18, decimal_places=8)
+
+    class Meta:
+        ordering = ["-provider_date", "-pk"]
+        constraints = [
+            models.UniqueConstraint(fields=["provider", "provider_date"], name="unique_fx_daily_observation"),
+            models.CheckConstraint(check=models.Q(cny_per_usd__gt=0), name="fx_observation_cny_positive"),
+            models.CheckConstraint(check=models.Q(ils_per_usd__gt=0), name="fx_observation_ils_positive"),
+        ]
+        indexes = [
+            models.Index(fields=["provider_date"], name="fx_observation_date_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.provider} {self.provider_date}"
+
+
 class Trader(models.Model):
     id = models.CharField(max_length=32, primary_key=True)
     user = models.OneToOneField(User, on_delete=models.PROTECT, related_name="trader")

@@ -4,12 +4,13 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from shop.fx import FxError, parse_frankfurter, publish_rates, refresh_exchange_rates
-from shop.models import Category, Currency, PriceList, Product, RateSnapshot, Trader, TraderCategoryDiscount
+from shop.fx import FxError, backfill_exchange_rates, parse_frankfurter, parse_frankfurter_series, publish_rates, refresh_exchange_rates
+from shop.models import Category, Currency, PriceList, Product, RateObservation, RateSnapshot, Trader, TraderCategoryDiscount
 from shop.pricing import quote_many
 
 
@@ -75,6 +76,70 @@ class ExchangeRateTests(TestCase):
         with patch("shop.fx.fetch_frankfurter", return_value=parse_frankfurter(payload)):
             call_command("refresh_exchange_rates")
         self.assertEqual(RateSnapshot.objects.get(is_current=True).provider_date, date(2026, 10, 12))
+        self.assertEqual(RateObservation.objects.get(provider_date=date(2026, 10, 12)).cny_per_usd, Decimal("7.10000000"))
+
+    def test_backfill_keeps_snapshots_and_skips_duplicates(self):
+        current, _created = publish_rates(date(2026, 10, 10), {"USD": Decimal("1"), "CNY": Decimal("7.20000000"), "ILS": Decimal("3.60000000")})
+        payload = {"base": "USD", "rates": {
+            "2026-01-02": {"CNY": "6.90000000", "ILS": "3.20000000"},
+            "2026-01-03": {"CNY": "0", "ILS": "3.20000000"},
+            "holiday": {"CNY": "6.1", "ILS": "3.1"},
+            "2026-01-05": {"CNY": "7.10000000", "ILS": "3.30000000"},
+        }}
+        observations, failed = parse_frankfurter_series(payload)
+        self.assertEqual(len(observations), 2)
+        self.assertEqual(len(failed), 2)
+
+        def opener(url, params, timeout):
+            self.assertIn("2026-01-01..2026-01-31", url)
+            return _response(payload)
+
+        first = backfill_exchange_rates(date(2026, 1, 1), date(2026, 1, 31), opener)
+        self.assertEqual(first["imported"], 2)
+        self.assertEqual(first["failed"], 2)
+        second = backfill_exchange_rates(date(2026, 1, 1), date(2026, 1, 31), opener)
+        self.assertEqual(second["imported"], 0)
+        self.assertEqual(second["skipped"], 2)
+        self.assertEqual(RateSnapshot.objects.get(is_current=True).pk, current.pk)
+        self.assertEqual(RateObservation.objects.get(provider_date=date(2026, 10, 10)).cny_per_usd, Decimal("7.20000000"))
+        self.assertEqual(RateObservation.objects.filter(provider_date=date(2026, 1, 2)).count(), 1)
+        with self.assertRaises(CommandError):
+            call_command("backfill_exchange_rates", start="2026-02-01", end="2026-01-01")
+
+    def test_history_is_staff_only_and_paginates(self):
+        User.objects.create_user("fx-history", password="staff-pass", is_staff=True)
+        start_day = date(2026, 1, 2)
+        for offset in range(31):
+            day = date.fromordinal(start_day.toordinal() + offset)
+            RateObservation.objects.create(
+                provider="frankfurter",
+                provider_date=day,
+                fetched_at=timezone.now(),
+                cny_per_usd=Decimal("6.50000000") + Decimal(offset) / Decimal("100000000"),
+                ils_per_usd=Decimal("3.10000000"),
+            )
+        guest = APIClient()
+        self.assertEqual(guest.get("/api/admin/fx/history/").status_code, 401)
+        buyer = User.objects.create_user("fx-buyer", password="buyer-pass")
+        trader_client = APIClient()
+        trader_client.force_login(buyer)
+        self.assertEqual(trader_client.get("/api/admin/fx/history/").status_code, 403)
+        client = APIClient()
+        client.post("/api/admin/auth/login/", {"username": "fx-history", "password": "staff-pass"}, format="json")
+        page = client.get("/api/admin/fx/history/", {"from": "2026-01-01", "to": "2026-12-31", "page": 1})
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.data["count"], 31)
+        self.assertEqual(page.data["page_size"], 30)
+        self.assertEqual(page.data["pages"], 2)
+        self.assertEqual(len(page.data["results"]), 30)
+        self.assertGreater(page.data["results"][0]["date"], page.data["results"][-1]["date"])
+        second = client.get("/api/admin/fx/history/", {"from": "2026-01-01", "to": "2026-12-31", "page": 2})
+        self.assertEqual(len(second.data["results"]), 1)
+        exact = client.get("/api/admin/fx/history/", {"date": page.data["results"][0]["date"]})
+        self.assertEqual(exact.data["count"], 1)
+        self.assertEqual(exact.data["results"][0]["provider"], "Frankfurter")
+        self.assertEqual(client.get("/api/admin/fx/history/", {"from": "2026-05-01", "to": "2026-01-01"}).status_code, 400)
+        self.assertEqual(client.get("/api/admin/fx/history/", {"page": 9}).status_code, 400)
 
 
 class OriginalPriceTests(TestCase):

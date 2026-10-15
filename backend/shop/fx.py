@@ -8,7 +8,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from shop.models import Currency, FxRefreshLock, RateSnapshot, RateSnapshotLine
+from shop.models import Currency, FxRefreshLock, RateObservation, RateSnapshot, RateSnapshotLine
 
 
 log = logging.getLogger(__name__)
@@ -171,6 +171,7 @@ def publish_rates(provider_date, rates, fetched_at=None):
         if _same_rates(current, provider_date, rates):
             current.fetched_at = fetched_at
             current.save(update_fields=["fetched_at"])
+            _upsert_observation(provider_date, rates, fetched_at)
             log.info("exchange rates unchanged provider_date=%s", provider_date.isoformat())
             return current, False
         RateSnapshot.objects.filter(is_current=True).update(is_current=False)
@@ -184,8 +185,149 @@ def publish_rates(provider_date, rates, fetched_at=None):
             RateSnapshotLine(snapshot=snapshot, currency_id=code, usd_rate=rates[code])
             for code in STORE_CURRENCIES
         ])
+        _upsert_observation(provider_date, rates, fetched_at)
         log.info("exchange rates published provider_date=%s", provider_date.isoformat())
         return snapshot, True
+
+
+def _upsert_observation(provider_date, rates, fetched_at):
+    """Record the published date for the history list without rewriting older snapshots."""
+    RateObservation.objects.update_or_create(
+        provider=PROVIDER,
+        provider_date=provider_date,
+        defaults={
+            "fetched_at": fetched_at,
+            "cny_per_usd": rates["CNY"],
+            "ils_per_usd": rates["ILS"],
+        },
+    )
+
+
+def parse_frankfurter_series(payload):
+    """Parse a Frankfurter range. Missing business days are omitted; bad days are reported, not invented."""
+    if not isinstance(payload, dict):
+        raise FxError("invalid_response")
+    if str(payload.get("base") or "").upper() != "USD" or not isinstance(payload.get("rates"), dict):
+        raise FxError("invalid_response")
+    observations = []
+    failed = []
+    for raw_date, row in payload["rates"].items():
+        label = str(raw_date)
+        try:
+            provider_date = date.fromisoformat(label[:10])
+        except ValueError:
+            failed.append(label)
+            continue
+        if not isinstance(row, dict):
+            failed.append(label)
+            continue
+        parsed = {"USD": Decimal("1")}
+        try:
+            for code in ("CNY", "ILS"):
+                if code not in row:
+                    raise FxError("missing_currency")
+                value = Decimal(str(row[code]))
+                if not value.is_finite() or value <= 0:
+                    raise FxError("invalid_rate")
+                parsed[code] = value.quantize(RATE_QUANTUM, rounding=ROUND_HALF_UP)
+        except (FxError, InvalidOperation, ValueError):
+            failed.append(label)
+            continue
+        observations.append((provider_date, parsed))
+    observations.sort(key=lambda item: item[0])
+    return observations, failed
+
+
+def _history_url(start, end):
+    configured = getattr(settings, "FX_PROVIDER_URL", "https://api.frankfurter.dev/v1/latest").rstrip("/")
+    root = configured[:-len("/latest")] if configured.endswith("/latest") else configured
+    return f"{root}/{start.isoformat()}..{end.isoformat()}"
+
+
+def fetch_frankfurter_history(start, end, opener=None):
+    import requests
+
+    if not isinstance(start, date) or not isinstance(end, date) or start > end:
+        raise FxError("invalid_response")
+    url = _history_url(start, end)
+    timeout = max(float(getattr(settings, "FX_TIMEOUT_SECONDS", 10)), 30)
+    params = {"base": "USD", "symbols": "CNY,ILS"}
+    try:
+        if opener is not None:
+            response = opener(url, params, timeout)
+        else:
+            response = requests.get(url, params=params, timeout=(timeout, timeout))
+    except requests.Timeout as exc:
+        raise FxError("timeout") from exc
+    except requests.RequestException as exc:
+        raise FxError("network") from exc
+    if getattr(response, "status_code", 200) >= 400:
+        raise FxError("network")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise FxError("invalid_response") from exc
+    return parse_frankfurter_series(payload)
+
+
+def backfill_exchange_rates(start, end=None, opener=None):
+    """Import published historical dates. Existing observations and the active snapshot are left unchanged."""
+    if not isinstance(start, date):
+        raise FxError("invalid_response")
+    end = end or timezone.localdate()
+    if not isinstance(end, date) or start > end:
+        raise FxError("invalid_response")
+    observations, failed = fetch_frankfurter_history(start, end, opener)
+    imported = 0
+    skipped = 0
+    ensure_store_currencies()
+    for provider_date, rates in observations:
+        if provider_date < start or provider_date > end:
+            skipped += 1
+            continue
+        if RateObservation.objects.filter(provider=PROVIDER, provider_date=provider_date).exists():
+            skipped += 1
+            continue
+        RateObservation.objects.create(
+            provider=PROVIDER,
+            provider_date=provider_date,
+            fetched_at=timezone.now(),
+            cny_per_usd=rates["CNY"],
+            ils_per_usd=rates["ILS"],
+        )
+        imported += 1
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "failed": len(failed),
+        "start": start,
+        "end": end,
+    }
+
+
+def observation_history(*, start, end, exact=None, page=1, page_size=30):
+    if not isinstance(start, date) or not isinstance(end, date) or start > end:
+        raise FxError("invalid_response")
+    if page < 1:
+        raise FxError("invalid_page")
+    queryset = RateObservation.objects.filter(provider_date__gte=start, provider_date__lte=end)
+    if exact is not None:
+        queryset = queryset.filter(provider_date=exact)
+    queryset = queryset.order_by("-provider_date", "-pk")
+    count = queryset.count()
+    pages = (count + page_size - 1) // page_size if count else 0
+    if (count == 0 and page != 1) or (pages and page > pages):
+        raise FxError("invalid_page")
+    offset = (page - 1) * page_size
+    return {
+        "count": count,
+        "page": page if count else 1,
+        "page_size": page_size,
+        "pages": pages,
+        "start": start,
+        "end": end,
+        "results": list(queryset[offset:offset + page_size]),
+    }
 
 
 def refresh_exchange_rates(opener=None):
