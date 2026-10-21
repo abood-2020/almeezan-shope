@@ -76,9 +76,9 @@ export async function downloadAdminExcel(tab: string, rows: any[], lang: 'ar' | 
   await exportExcel(mapped, `Riwaq-${tab}`, {sheet, rtl: !english});
 }
 export const columns = productTemplateColumns;
-export async function downloadTemplate(lang: ImportLang = 'ar') {
+export async function downloadTemplate(lang: ImportLang = 'ar', sampleCategoryId?: number) {
   const XLSX = await import('xlsx');
-  XLSX.writeFile(fillProductTemplate(XLSX, importLanguage(lang)), 'Riwaq-Product-Template.xlsx');
+  XLSX.writeFile(fillProductTemplate(XLSX, importLanguage(lang), sampleCategoryId), 'Riwaq-Product-Template.xlsx');
 }
 export async function readImport(file: File, products: Product[], categoryIds: number[] = [], lang: ImportLang = 'ar') {
   const XLSX = await import('xlsx');

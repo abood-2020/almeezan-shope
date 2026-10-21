@@ -277,6 +277,7 @@ class SettingsWriteSerializer(serializers.Serializer):
     address_en = serializers.CharField(required=False, allow_blank=True, max_length=240)
     instagram_url = serializers.CharField(required=False, allow_blank=True, max_length=200)
     facebook_url = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    social_links = serializers.ListField(child=serializers.DictField(), required=False)
     seo_title_ar = serializers.CharField(required=False, allow_blank=True, max_length=120)
     seo_title_en = serializers.CharField(required=False, allow_blank=True, max_length=120)
     seo_description_ar = serializers.CharField(required=False, allow_blank=True)

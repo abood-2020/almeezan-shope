@@ -3,7 +3,7 @@ import {useEffect, useState} from 'react';
 import {ChevronDown, CircleHelp, Clapperboard, Phone, Plus, Store} from 'lucide-react';
 import {Button} from '@/components/ui/button';
 import {api, apiError, resolveMedia} from './api';
-import type {FaqItem, HomeSection, StoreContent} from './store-content';
+import type {FaqItem, HomeSection, SocialLink, StoreContent} from './store-content';
 
 type Props = {lang: 'ar' | 'en'; onSaved: (content: StoreContent) => void};
 type SectionId = 'brand' | 'home' | 'faq' | 'contact';
@@ -17,6 +17,7 @@ const SECTIONS: {id: SectionId; ar: string; en: string; descAr: string; descEn: 
 ];
 
 const emptyFaq = {question_ar: '', question_en: '', answer_ar: '', answer_en: ''};
+let socialDraftId = -1;
 
 export default function StoreSettings({lang, onSaved}: Props) {
   const en = lang === 'en';
@@ -54,7 +55,7 @@ export default function StoreSettings({lang, onSaved}: Props) {
     brand: ['name_ar', 'name_en', 'logo_alt_ar', 'logo_alt_en'].some(key => form.brand[key as keyof typeof form.brand] !== baseline.brand[key as keyof typeof baseline.brand]) || !!files.logo,
     home: !!files.hero_video || !!files.hero_poster || form.hero.video_url !== baseline.hero.video_url || ['eyebrow_ar', 'eyebrow_en', 'title_ar', 'title_en', 'body_ar', 'body_en'].some(key => hero?.[key as keyof HomeSection] !== savedHero?.[key as keyof HomeSection]),
     faq: JSON.stringify(form.faqs) !== JSON.stringify(baseline.faqs) || Object.values(faqDraft).some(Boolean),
-    contact: JSON.stringify(form.contact) !== JSON.stringify(baseline.contact),
+    contact: JSON.stringify(form.contact) !== JSON.stringify(baseline.contact) || JSON.stringify(form.social_links || []) !== JSON.stringify(baseline.social_links || []),
   };
 
   const remember = (next: StoreContent, part: SectionId) => {
@@ -67,7 +68,7 @@ export default function StoreSettings({lang, onSaved}: Props) {
         return {...current, hero: next.hero, sections: savedSection ? current.sections.map(section => section.key === 'hero' ? savedSection : section) : current.sections};
       }
       if (part === 'faq') return {...current, faqs: mergeFaqs(current.faqs, next.faqs)};
-      return {...current, contact: next.contact, company_whatsapp_number: next.company_whatsapp_number};
+      return {...current, contact: next.contact, company_whatsapp_number: next.company_whatsapp_number, social_links: next.social_links || []};
     });
     onSaved(next);
     setSaved(t('تم الحفظ', 'Saved'));
@@ -81,7 +82,7 @@ export default function StoreSettings({lang, onSaved}: Props) {
       if (part === 'brand') return {...current, brand: baseline.brand};
       if (part === 'home') return {...current, hero: baseline.hero, sections: current.sections.map(section => section.key === 'hero' ? (savedHero || section) : section)};
       if (part === 'faq') return {...current, faqs: baseline.faqs};
-      return {...current, contact: baseline.contact, company_whatsapp_number: baseline.company_whatsapp_number};
+      return {...current, contact: baseline.contact, company_whatsapp_number: baseline.company_whatsapp_number, social_links: baseline.social_links || []};
     });
     if (part === 'brand') setFiles(current => {const next = {...current}; delete next.logo; return next;});
     if (part === 'home') setFiles(current => {const next = {...current}; delete next.hero_video; delete next.hero_poster; return next;});
@@ -117,7 +118,9 @@ export default function StoreSettings({lang, onSaved}: Props) {
 
   const saveContact = async () => {
     setBusy(true); setError(''); setSaved('');
-    const result = await api<StoreContent>('/api/admin/settings/', {method: 'PATCH', body: JSON.stringify({company_whatsapp_number: form.contact.whatsapp, phone: form.contact.phone, email: form.contact.email, address_ar: form.contact.address_ar, address_en: form.contact.address_en, instagram_url: form.contact.instagram_url, facebook_url: form.contact.facebook_url})});
+    const links = form.social_links || [];
+    if (links.some(link => !link.name.trim() || !link.url.trim())) {setBusy(false); setError(t('أدخل اسم المعرّف والرابط لكل وسيلة', 'Enter a display name and URL for every link')); return;}
+    const result = await api<StoreContent>('/api/admin/settings/', {method: 'PATCH', body: JSON.stringify({company_whatsapp_number: form.contact.whatsapp, phone: form.contact.phone, email: form.contact.email, address_ar: form.contact.address_ar, address_en: form.contact.address_en, social_links: links.map((link, index) => ({name: link.name.trim(), url: link.url.trim(), sort_order: index, is_active: link.is_active !== false}))})});
     setBusy(false);
     if (!result.ok) {setError(apiError(result.data, t('تعذر الحفظ', 'Could not save'))); return;}
     remember(result.data, 'contact');
@@ -227,11 +230,10 @@ export default function StoreSettings({lang, onSaved}: Props) {
                   <label>{t('هاتف الشركة', 'Company phone')}<input dir="ltr" value={form.contact.phone} onChange={e => patch(current => ({...current, contact: {...current.contact, phone: e.target.value}}))}/></label>
                   <label>{t('واتساب مع رمز الدولة', 'WhatsApp with country code')}<input dir="ltr" value={form.contact.whatsapp} onChange={e => patch(current => ({...current, company_whatsapp_number: e.target.value.replace(/\D/g, ''), contact: {...current.contact, whatsapp: e.target.value}}))}/></label>
                   <label>{t('البريد', 'Email')}<input dir="ltr" value={form.contact.email} onChange={e => patch(current => ({...current, contact: {...current.contact, email: e.target.value}}))}/></label>
-                  <label>{t('إنستغرام', 'Instagram')}<input dir="ltr" value={form.contact.instagram_url} onChange={e => patch(current => ({...current, contact: {...current.contact, instagram_url: e.target.value}}))} placeholder="https://"/></label>
-                  <label>{t('فيسبوك', 'Facebook')}<input dir="ltr" value={form.contact.facebook_url} onChange={e => patch(current => ({...current, contact: {...current.contact, facebook_url: e.target.value}}))} placeholder="https://"/></label>
                   <label>{t('العنوان بالعربية', 'Arabic address')}<input value={form.contact.address_ar} onChange={e => patch(current => ({...current, contact: {...current.contact, address_ar: e.target.value}}))}/></label>
                   <label>{t('العنوان بالإنجليزية', 'English address')}<input value={form.contact.address_en} onChange={e => patch(current => ({...current, contact: {...current.contact, address_en: e.target.value}}))}/></label>
                 </div>
+                <SocialLinks t={t} en={en} links={form.social_links || []} onChange={recipe => patch(current => ({...current, social_links: recipe(current.social_links || []).map((link, index) => ({...link, sort_order: index}))}))}/>
                 <Actions t={t} busy={busy} onSave={() => void saveContact()} onCancel={() => cancel('contact')}/>
               </div>}
             </div>
@@ -264,6 +266,27 @@ function FaqFields({t, item, onChange}: {t: Translator; item: {question_ar: stri
     <label>{t('الجواب بالعربية', 'Arabic answer')}<textarea value={item.answer_ar} onChange={e => onChange({...item, answer_ar: e.target.value})}/></label>
     <label>{t('الجواب بالإنجليزية', 'English answer')}<textarea value={item.answer_en} onChange={e => onChange({...item, answer_en: e.target.value})}/></label>
   </div>;
+}
+
+function SocialLinks({t, links, onChange}: {t: Translator; en: boolean; links: SocialLink[]; onChange: (recipe: (links: SocialLink[]) => SocialLink[]) => void}) {
+  return <section className="social-editor">
+    <div className="social-editor-head">
+      <h3>{t('وسائل التواصل الاجتماعي', 'Social Media & Contact Links')}</h3>
+      <Button type="button" className="btn light" onClick={() => onChange(current => [...current, {id: socialDraftId--, name: '', url: '', sort_order: current.length, is_active: true}])}><Plus size={16}/>{t('إضافة وسيلة تواصل', 'Add Social Link')}</Button>
+    </div>
+    {links.map((link, index) => <div key={link.id} className="social-editor-row">
+      <label>{t('اسم المعرّف', 'Display Name')}<input value={link.name} onChange={event => onChange(current => current.map(item => item.id === link.id ? {...item, name: event.target.value} : item))}/></label>
+      <label>{t('عنوان الرابط', 'URL')}<input dir="ltr" value={link.url} placeholder="https://" onChange={event => onChange(current => current.map(item => item.id === link.id ? {...item, url: event.target.value} : item))}/></label>
+      <div className="social-editor-foot">
+      <label className="check-label"><input type="checkbox" checked={link.is_active !== false} onChange={event => onChange(current => current.map(item => item.id === link.id ? {...item, is_active: event.target.checked} : item))}/>{t('ظاهر', 'Visible')}</label>
+      <div className="store-actions">
+        <Button type="button" className="btn light" disabled={index === 0} onClick={() => onChange(current => {const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next;})}>{t('أعلى', 'Up')}</Button>
+        <Button type="button" className="btn light" disabled={index === links.length - 1} onClick={() => onChange(current => {const next = [...current]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; return next;})}>{t('أسفل', 'Down')}</Button>
+        <Button type="button" className="btn light" onClick={() => {if (!window.confirm(t('حذف وسيلة التواصل هذه؟', 'Delete this social link?'))) return; onChange(current => current.filter(item => item.id !== link.id));}}>{t('حذف', 'Delete')}</Button>
+      </div>
+      </div>
+    </div>)}
+  </section>;
 }
 
 function Preview({file, saved, alt}: {file?: File; saved: string; alt: string}) {

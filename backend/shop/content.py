@@ -324,10 +324,84 @@ def _block_payload(block):
     }
 
 
+def link_url(value, field="url"):
+    text = plain(value, field, 500).strip()
+    if not text:
+        raise ValidationError({field: "Enter a link URL."})
+    parsed = urlparse(text)
+    host = (parsed.hostname or "").strip().lower()
+    if parsed.scheme not in {"http", "https"} or not host or parsed.username or parsed.password:
+        raise ValidationError({field: "Enter an http or https URL."})
+    if parsed.scheme == "javascript" or text.lower().startswith(("javascript:", "data:")):
+        raise ValidationError({field: "Enter an http or https URL."})
+    return text
+
+
+def ensure_social_links(setting):
+    from shop.models import SiteSetting, StoreSocialLink
+
+    if setting.social_links_migrated:
+        return setting
+    with transaction.atomic():
+        locked = SiteSetting.objects.select_for_update().get(pk=setting.pk)
+        if locked.social_links_migrated:
+            return locked
+        order = 0
+        for name, url in (("Facebook", locked.facebook_url), ("Instagram", locked.instagram_url)):
+            if not url:
+                continue
+            if not locked.social_links.filter(name=name, url=url).exists():
+                StoreSocialLink.objects.create(site=locked, name=name, url=url, sort_order=order, is_active=True)
+            order += 1
+        SiteSetting.objects.filter(pk=locked.pk).update(social_links_migrated=True)
+        locked.social_links_migrated = True
+        return locked
+
+
+def replace_social_links(setting, rows):
+    from shop.models import SiteSetting, StoreSocialLink
+
+    if not isinstance(rows, list):
+        raise ValidationError({"social_links": "Expected a list of links."})
+    if len(rows) > 100:
+        raise ValidationError({"social_links": "Use at most 100 links."})
+    cleaned = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValidationError({"social_links": "Each link needs a name and URL."})
+        name = plain(row.get("name"), "name", 80).strip()
+        url = link_url(row.get("url"), "url")
+        if not name:
+            raise ValidationError({"name": "Enter a display name."})
+        active = row.get("is_active", True)
+        if isinstance(active, str):
+            active = active.lower() not in {"0", "false", "no", "off"}
+        cleaned.append((name, url, index, bool(active)))
+    with transaction.atomic():
+        setting.social_links.all().delete()
+        StoreSocialLink.objects.bulk_create([
+            StoreSocialLink(site=setting, name=name, url=url, sort_order=order, is_active=active)
+            for name, url, order, active in cleaned
+        ])
+        SiteSetting.objects.filter(pk=setting.pk).update(social_links_migrated=True)
+    setting.social_links_migrated = True
+    return setting
+
+
+def _social_payload(setting, include_inactive):
+    links = setting.social_links.all()
+    if not include_inactive:
+        links = links.filter(is_active=True)
+    return [
+        {"id": link.id, "name": link.name, "url": link.url, "sort_order": link.sort_order, "is_active": link.is_active}
+        for link in links
+    ]
+
+
 def content_payload(include_inactive_faqs=False):
     from shop.models import ContentPage, FaqItem, HomepageSection
 
-    setting = ensure_store_content()
+    setting = ensure_social_links(ensure_store_content())
     labels = {**NAV_LABELS, **(setting.nav_labels or {})}
     sections = []
     for section in HomepageSection.objects.prefetch_related("blocks").order_by("sort_order", "id"):
@@ -369,6 +443,7 @@ def content_payload(include_inactive_faqs=False):
             "instagram_url": setting.instagram_url,
             "facebook_url": setting.facebook_url,
         },
+        "social_links": _social_payload(setting, include_inactive_faqs),
         "seo": {
             "title_ar": setting.seo_title_ar,
             "title_en": setting.seo_title_en,

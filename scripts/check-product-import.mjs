@@ -20,8 +20,8 @@ function matrixOf(book) {
   return XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], {header: 1, raw: true});
 }
 
-const arabicBook = fillProductTemplate(XLSX, 'ar');
-const englishBook = fillProductTemplate(XLSX, 'en');
+const arabicBook = fillProductTemplate(XLSX, 'ar', 1);
+const englishBook = fillProductTemplate(XLSX, 'en', 1);
 const arabicMatrix = matrixOf(arabicBook);
 const englishMatrix = matrixOf(englishBook);
 const arabicHeaders = templateHeaders('ar');
@@ -38,6 +38,10 @@ assert(arabicMatrix[1].join('|') === englishMatrix[1].join('|'), 'Sample values 
 assert(arabicMatrix[1][0] === 'RW-NEW-001' && arabicMatrix[1][3] === 1 && arabicMatrix[1][7] === 'CNY' && arabicMatrix[1][8] === 100 && arabicMatrix[1][9] === 1, 'Sample contract');
 assert(!englishHeaders.includes('Base_Price_ILS') && !arabicHeaders.includes('السعر الأساسي (ILS)'), 'Legacy ILS column was removed from the template');
 assert(!englishHeaders.includes('Base_Price_USD') && !arabicHeaders.includes('السعر الأساسي (USD)'), 'USD column was not added');
+assert(englishHeaders.at(-1) === 'Product_Image' && arabicHeaders.at(-1) === 'صورة المنتج', 'Image column is last');
+assert(englishHeaders.slice(0, -1).join('|') === 'Code|Name_AR|Name_EN|Category_ID|Unit_AR|Unit_EN|Min_Qty|Original_Currency|Original_Price|Available|Description_AR|Description_EN', 'Existing columns stay in order');
+const blankCategory = matrixOf(fillProductTemplate(XLSX, 'en'));
+assert(blankCategory[1][3] !== 1, 'Sample category is not a hardcoded id');
 
 for (const field of PRODUCT_TEMPLATE_FIELDS) {
   assert(canonicalHeader(`  ${field.ar}  `) === field.key, `Arabic alias ${field.key}`);
@@ -86,7 +90,15 @@ assert(duplicateImport.errors.some(error => error.includes('Duplicate column: Co
 const badCategory = englishMatrix.map(row => row.slice());
 badCategory[1][3] = 99;
 const badCategoryImport = inspectProductImport(badCategory, ['RW-NEW-001'], categoryIds, 'en');
-assert(badCategoryImport.errors.some(error => error.includes('Category_ID must match')), 'Invalid category');
+assert(badCategoryImport.errors.some(error => error.includes('Category_ID 99 does not exist')), 'Invalid category');
+assert(badCategoryImport.categoryProblems[0].value === '99' && badCategoryImport.categoryProblems[0].rows.includes(2), 'Category problem identifies the value and row');
+const mapped = mod.applyCategoryMappings(badCategoryImport.rows, {'99': 1}, categoryIds);
+const mappedReview = mod.reviewImportRows(mapped, badCategoryImport.excelRows, ['RW-NEW-001'], categoryIds, 'en');
+assert(mappedReview.categoryProblems.length === 0, 'Explicit category mapping clears the category error');
+assert(mappedReview.errors.some(error => error.includes('duplicate code')), 'Mapping does not hide other errors');
+const withoutImage = [englishHeaders.filter(header => header !== 'Product_Image'), englishMatrix[1].filter((_, index) => englishHeaders[index] !== 'Product_Image')];
+const withoutImageImport = inspectProductImport(withoutImage, [], categoryIds, 'en');
+assert(withoutImageImport.errors.length === 0, `Workbook without image column: ${withoutImageImport.errors.join(' | ')}`);
 assert(badCategoryImport.errors.some(error => error.includes('duplicate code')), 'Existing code');
 
 const badNumber = englishMatrix.map(row => row.slice());

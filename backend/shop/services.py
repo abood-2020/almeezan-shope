@@ -974,8 +974,11 @@ def save_invoice(data, invoice=None, upload=None):
 
 
 def update_site_settings(data, files=None):
+    from shop.content import replace_social_links
     from shop.uploads import UPLOAD_FIELDS, validate_public_upload
 
+    data = dict(data)
+    social_links = data.pop("social_links", None)
     setting = get_site_settings()
     for key, value in data.items():
         setattr(setting, key, value)
@@ -988,10 +991,12 @@ def update_site_settings(data, files=None):
             current.delete(save=False)
         setattr(setting, key, upload)
     setting.save()
+    if social_links is not None:
+        replace_social_links(setting, social_links)
     return setting
 
 
-def import_products(rows, lang="ar"):
+def import_products(rows, lang="ar", category_map=None, embedded=None):
     english = str(lang or "").lower().startswith("en")
 
     def say(en, ar):
@@ -1006,45 +1011,64 @@ def import_products(rows, lang="ar"):
     prepared = []
     seen = set(Product.objects.values_list("code", flat=True))
     categories = set(Category.objects.values_list("id", flat=True))
+    embedded = embedded or {}
     for index, raw in enumerate(rows):
         row, duplicates = _canonicalize_import_row(raw)
         prefix = say(f"Row {index + 2}", f"صف {index + 2}")
         if duplicates:
             errors.append(say(f"{prefix}: duplicate columns", f"{prefix}: أعمدة مكررة"))
             continue
+        row = _apply_category_map(row, categories, category_map)
         problems = _import_problems(row, seen, categories, english)
+        image_problem, image = _import_image(row, embedded.get(index), say, fetch=not problems)
+        if image_problem:
+            problems.append(image_problem)
         if problems:
             errors.append(f"{prefix}: " + " · ".join(problems))
             continue
         code = str(_import_cell(row, "Code", "code")).strip()
         seen.add(code)
-        prepared.append(_normalized_import_row(row, code))
+        prepared.append((_normalized_import_row(row, code), image))
     if errors:
         raise ValidationError({"rows": errors})
     created = []
+    stored_names = []
+    from django.core.files.base import ContentFile
+    from django.core.files.storage import default_storage
     from shop.fx import ensure_store_currencies
 
     ensure_store_currencies()
-    with transaction.atomic():
-        for row in prepared:
-            product = Product.objects.create(
-                category_id=row["category_id"],
-                name_ar=row["name_ar"],
-                name_en=row["name_en"],
-                code=row["code"],
-                base_price_ils=row["base_price_ils"],
-                original_price=row["original_price"],
-                original_currency_id=row["original_currency_code"],
-                unit_ar=row["unit_ar"],
-                unit_en=row["unit_en"],
-                min_qty=row["min_qty"],
-                available=row["available"],
-                description_ar=row["description_ar"],
-                description_en=row["description_en"],
-            )
-            ProductImage.objects.create(product=product, image_key="men-shirt", is_primary=True, sort_order=0)
-            ProductOption.objects.create(product=product, label="افتراضي / Default", is_available=True, sort_order=0)
-            created.append(product.pk)
+    try:
+        with transaction.atomic():
+            for row, image in prepared:
+                product = Product.objects.create(
+                    category_id=row["category_id"],
+                    name_ar=row["name_ar"],
+                    name_en=row["name_en"],
+                    code=row["code"],
+                    base_price_ils=row["base_price_ils"],
+                    original_price=row["original_price"],
+                    original_currency_id=row["original_currency_code"],
+                    unit_ar=row["unit_ar"],
+                    unit_en=row["unit_en"],
+                    min_qty=row["min_qty"],
+                    available=row["available"],
+                    description_ar=row["description_ar"],
+                    description_en=row["description_en"],
+                )
+                if image:
+                    picture = ProductImage(product=product, is_primary=True, sort_order=0)
+                    filename = _import_image_name(product.code, image[1])
+                    picture.image.save(filename, ContentFile(image[0]), save=True)
+                    stored_names.append(picture.image.name)
+                else:
+                    ProductImage.objects.create(product=product, image_key="men-shirt", is_primary=True, sort_order=0)
+                ProductOption.objects.create(product=product, label="افتراضي / Default", is_available=True, sort_order=0)
+                created.append(product.pk)
+    except Exception:
+        for name in stored_names:
+            default_storage.delete(name)
+        raise
     return list(_product_queryset().filter(pk__in=created))
 
 
@@ -1076,6 +1100,8 @@ _IMPORT_LABELS = {
     "الوصف (عربي)": "Description_AR",
     "description_en": "Description_EN",
     "الوصف (إنجليزي)": "Description_EN",
+    "product_image": "Product_Image",
+    "صورة المنتج": "Product_Image",
 }
 
 
@@ -1131,7 +1157,8 @@ def _import_problems(row, seen, categories, english=True):
     category_raw = _import_cell(row, "Category_ID", "category_id")
     category_id = _import_int(category_raw)
     if category_id is None or category_id not in categories:
-        problems.append(say("invalid category", "معرّف التصنيف غير موجود"))
+        shown = "" if category_raw is None else str(category_raw).strip()
+        problems.append(say(f"invalid category: {shown or '—'}", f"معرّف التصنيف غير موجود: {shown or '—'}"))
     if _import_int(_import_cell(row, "Min_Qty", "min_qty")) is None:
         problems.append(say("invalid minimum", "الحد الأدنى غير صالح"))
     else:
@@ -1201,6 +1228,67 @@ def _resolved_import_price(row):
         return code, amount, base
     amount = Decimal(str(legacy))
     return "ILS", amount, amount
+
+
+def _apply_category_map(row, categories, category_map):
+    if not category_map:
+        return row
+    cell = _import_cell(row, "Category_ID", "category_id")
+    current = _import_int(cell)
+    if current in categories:
+        return row
+    text = "" if cell is None else str(cell).strip()
+    keys = []
+    if current is not None:
+        keys.append(str(current))
+    if text not in keys:
+        keys.append(text)
+    raw = None
+    for key in keys:
+        if key in category_map:
+            raw = category_map[key]
+            break
+    mapped = _import_int(raw)
+    if mapped is None:
+        return row
+    updated = dict(row)
+    updated["Category_ID"] = mapped
+    return updated
+
+
+def _import_image(row, embedded, say, fetch):
+    from shop.remote_images import ImageFetchError, assert_public_http_url, download_product_image, sniff_image
+
+    url = str(_import_cell(row, "Product_Image") or "").strip()
+    pictures = list(embedded or [])
+    if url and pictures:
+        return say("row has both an image URL and an embedded image", "الصف يحتوي على رابط صورة وصورة مدمجة معًا"), None
+    if len(pictures) > 1:
+        return say("multiple images are anchored to this row", "أكثر من صورة مرتبطة بهذا الصف"), None
+    if pictures:
+        kind = sniff_image(pictures[0])
+        if not kind:
+            return say("unsupported or corrupted image", "صورة غير مدعومة أو تالفة"), None
+        return None, (pictures[0], kind)
+    if not url:
+        return None, None
+    try:
+        assert_public_http_url(url)
+    except ImageFetchError as exc:
+        return say(exc.english, exc.arabic), None
+    if not fetch:
+        return None, None
+    try:
+        data, kind = download_product_image(url)
+    except ImageFetchError as exc:
+        return say(exc.english, exc.arabic), None
+    return None, (data, kind)
+
+
+def _import_image_name(code, kind):
+    import re
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", str(code)).strip("-.")[:40] or "product"
+    return f"{stem}.{kind}"
 
 
 def _import_int(value):

@@ -758,6 +758,7 @@ class SiteSetting(models.Model):
     footer_place_en = models.CharField(max_length=80, default="Palestine · Worldwide")
     nav_labels = models.JSONField(default=dict, blank=True)
     content_initialized = models.BooleanField(default=False)
+    social_links_migrated = models.BooleanField(default=False)
 
     class Meta:
         verbose_name = "site setting"
@@ -784,6 +785,20 @@ class SiteSetting(models.Model):
 
     def __str__(self):
         return "Site settings"
+
+
+class StoreSocialLink(models.Model):
+    site = models.ForeignKey(SiteSetting, on_delete=models.CASCADE, related_name="social_links")
+    name = models.CharField(max_length=80)
+    url = models.URLField(max_length=500)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self):
+        return self.name
 
 
 class HomepageSection(models.Model):

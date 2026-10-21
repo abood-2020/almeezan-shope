@@ -457,19 +457,51 @@ class AdminFaqOrderView(AdminAPIView):
         return response
 
 
+def _category_map(value):
+    import json
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValidationError({"category_map": ["Category mapping must be an object."]}) from exc
+    if not isinstance(value, dict):
+        raise ValidationError({"category_map": ["Category mapping must be an object."]})
+    return value
+
+
 class BulkImportView(AdminAPIView):
     def post(self, request):
+        upload = request.FILES.get("file")
+        if upload is not None:
+            from shop.excel_images import read_import_workbook
+            rows, embedded = read_import_workbook(upload)
+            lang = request.data.get("lang", "ar")
+            products = _saved(import_products, rows, lang, _category_map(request.data.get("category_map")), embedded)
+            return Response({"created": len(products), "products": [admin_product_payload(product) for product in products]}, status=201)
         payload = request.data
         if isinstance(payload, list):
             rows = payload
             lang = "ar"
+            category_map = None
         else:
             rows = payload.get("rows")
             lang = payload.get("lang", "ar")
+            category_map = _category_map(payload.get("category_map"))
         if not isinstance(rows, list):
             raise ValidationError({"rows": ["Expected a list of rows."]})
-        products = _saved(import_products, rows, lang)
+        products = _saved(import_products, rows, lang, category_map)
         return Response({"created": len(products), "products": [admin_product_payload(product) for product in products]}, status=201)
+
+
+class ImportPreviewView(AdminAPIView):
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if upload is None:
+            raise ValidationError({"file": ["Choose a workbook."]})
+        from shop.excel_images import preview_embedded_images
+        return Response(preview_embedded_images(upload))
 
 
 def _flag(value):

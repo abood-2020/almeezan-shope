@@ -17,10 +17,12 @@ export type ContentPage = {
   blocks: CopyBlock[];
 };
 export type FaqItem = {id: number; question_ar: string; question_en: string; answer_ar: string; answer_en: string; sort_order: number; is_active: boolean};
+export type SocialLink = {id: number; name: string; url: string; sort_order: number; is_active: boolean};
 export type StoreContent = {
   company_whatsapp_number: string;
   brand: {name_ar: string; name_en: string; tagline_ar: string; tagline_en: string; header_caption_ar: string; header_caption_en: string; logo: string; logo_alt_ar: string; logo_alt_en: string; favicon: string};
   contact: {phone: string; whatsapp: string; email: string; address_ar: string; address_en: string; instagram_url: string; facebook_url: string};
+  social_links: SocialLink[];
   seo: {title_ar: string; title_en: string; description_ar: string; description_en: string; image: string};
   hero: {video: string; video_url: string; poster: string};
   footer: {explore_ar: string; explore_en: string; account_ar: string; account_en: string; copyright_ar: string; copyright_en: string; note_ar: string; note_en: string; place_ar: string; place_en: string};

@@ -423,3 +423,25 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .fx-history-table{overflow-x:auto}
 .fx-history-table table{min-width:640px}
 }
+.social-editor{display:grid;gap:10px;padding-top:4px}
+.social-editor-head{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.social-editor-head h3{font-size:16px}
+.social-editor-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:10px;padding:12px;border:1px solid #eadfe6;border-radius:10px;background:#fbf8fa}
+.social-editor-foot{grid-column:1/-1;display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:wrap}
+.social-editor-row .check-label{display:inline-flex;align-items:center;gap:8px;width:auto;margin:0;min-height:36px;padding:0 12px;border:1px solid #eadfe6;border-radius:8px;background:#fff;font-size:13px;color:#5c4d56}
+.social-editor-row .check-label input[type=checkbox]{width:16px;height:16px;margin:0;accent-color:#b41f71;flex:none}
+.social-link-list{list-style:none;display:grid;gap:8px;margin:12px 0 0;padding:0}
+.social-link-list a{display:flex;align-items:center;gap:10px;min-height:44px;padding:8px 10px;border:1px solid #eadfe6;border-radius:10px;background:#fff;color:#3c3038}
+.social-link-list a:hover{border-color:#b41f71;color:#b41f71}
+.social-icon{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:#f8eaf2;color:#b41f71;flex:none}
+.site-footer .social-link-list{grid-template-columns:1fr}
+.import-dialog{width:min(960px,calc(100vw - 24px));max-height:min(92vh,900px);overflow:auto}
+.import-map,.import-errors{display:grid;gap:8px}
+.import-map-row{display:grid;grid-template-columns:minmax(140px,.6fr) minmax(0,1fr);gap:10px;align-items:end}
+.import-map-row small{display:block;color:#6d5c66}
+.import-errors{margin:0;padding-inline-start:18px;color:#a0244e}
+.import-preview table{width:100%;border-collapse:collapse}
+.import-preview th,.import-preview td{padding:8px 10px;border-bottom:1px solid #eadfe6;text-align:start;vertical-align:middle}
+.import-thumb{width:48px;height:48px;object-fit:cover;border-radius:6px;background:#f4eff2}
+.import-url{display:block;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:700px){.social-editor-row,.import-map-row{grid-template-columns:1fr}.import-dialog{width:calc(100vw - 16px)}}

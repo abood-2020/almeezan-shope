@@ -43,6 +43,7 @@ from shop.api.admin_views import (
     AdminTraderListView,
     AdminTraderPasswordView,
     BulkImportView,
+    ImportPreviewView,
 )
 
 urlpatterns = [
@@ -50,6 +51,7 @@ urlpatterns = [
     path("auth/logout/", AdminLogoutView.as_view(), name="admin-logout"),
     path("auth/me/", AdminMeView.as_view(), name="admin-me"),
     path("products/bulk-import/", BulkImportView.as_view(), name="admin-bulk-import"),
+    path("products/import-preview/", ImportPreviewView.as_view(), name="admin-import-preview"),
     path("products/", AdminProductListView.as_view(), name="admin-products"),
     path("products/<int:product_id>/", AdminProductDetailView.as_view(), name="admin-product-detail"),
     path("products/<int:product_id>/images/", AdminProductImageListView.as_view(), name="admin-product-images"),
