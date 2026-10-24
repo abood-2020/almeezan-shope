@@ -43,6 +43,7 @@ export type ApiTrader = {
   city?: string;
   category_discounts?: {category_id: number; discount_percent: string}[];
   active: boolean;
+  is_staff?: boolean;
   price_list: {id: string; name_ar: string; name_en: string; currency_code: string; currency_symbol: string};
 };
 export type ApiOrder = {
@@ -75,7 +76,7 @@ export type ApiPriceList = {
 };
 export type ApiCurrency = {code: string; name: string; symbol: string};
 export type UiCategory = {id?: number; ar: string; en: string; img?: string; parentId?: number | null; level?: number};
-export type UiTrader = {id: string; ar: string; en: string; username: string; email: string; phone: string; country: string; city: string; list: string; active: boolean; discounts: {category_id: number; discount_percent: string}[]};
+export type UiTrader = {id: string; ar: string; en: string; username: string; email: string; phone: string; country: string; city: string; list: string; active: boolean; admin: boolean; discounts: {category_id: number; discount_percent: string}[]};
 export type UiCurrency = {id: string; name: string; symbol: string};
 export type UiInvoice = {id: string; date: string; merchant: string; amount: number; url: string; name: string};
 
@@ -166,6 +167,7 @@ export function traderFromApi(trader: ApiTrader): UiTrader {
     city: trader.city || "",
     list: trader.price_list.id,
     active: trader.active,
+    admin: trader.is_staff === true,
     discounts: trader.category_discounts || [],
   };
 }

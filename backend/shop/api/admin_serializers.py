@@ -432,4 +432,6 @@ def admin_invoice_payload(invoice):
 
 
 def admin_trader_payload(trader):
-    return trader_payload(trader)
+    payload = trader_payload(trader)
+    payload["is_staff"] = bool(trader.user.is_staff)
+    return payload

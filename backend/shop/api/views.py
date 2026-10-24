@@ -81,6 +81,7 @@ class GoogleLoginView(APIView):
             "authenticated": True,
             "trader": trader_payload(trader),
             "profile_required": profile_required,
+            "is_staff": bool(trader.user.is_staff),
         })
 
 
@@ -119,6 +120,7 @@ class MeView(APIView):
             "authenticated": True,
             "trader": trader_payload(trader),
             "profile_required": google_profile_required(trader),
+            "is_staff": bool(trader.user.is_staff),
         })
 
 

@@ -57,6 +57,8 @@ from shop.services import (
     delete_product_image,
     get_site_settings,
     import_products,
+    AdminAccessError,
+    change_trader_admin,
     login_staff,
     replace_price_list_prices,
     save_category,
@@ -237,6 +239,33 @@ class AdminTraderPasswordView(AdminAPIView):
         serializer.is_valid(raise_exception=True)
         set_trader_password(trader, serializer.validated_data["password"])
         return Response({"detail": "Password updated."})
+
+
+def _trader_access_response(request, trader, grant):
+    try:
+        trader, changed = change_trader_admin(request.user, trader, grant)
+    except AdminAccessError as exc:
+        return Response({"code": exc.code, "detail": exc.detail}, status=400)
+    return Response(
+        {
+            "trader": admin_trader_payload(trader),
+            "is_staff": bool(trader.user.is_staff),
+            "changed": changed,
+            "self": request.user.pk == trader.user_id,
+        }
+    )
+
+
+class AdminTraderPromoteView(AdminAPIView):
+    def post(self, request, trader_id):
+        trader = get_object_or_404(Trader.objects.select_related("user", "price_list__currency"), pk=trader_id)
+        return _trader_access_response(request, trader, True)
+
+
+class AdminTraderRevokeView(AdminAPIView):
+    def post(self, request, trader_id):
+        trader = get_object_or_404(Trader.objects.select_related("user", "price_list__currency"), pk=trader_id)
+        return _trader_access_response(request, trader, False)
 
 
 class AdminCurrencyListView(AdminAPIView):

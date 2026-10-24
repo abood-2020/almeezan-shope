@@ -390,6 +390,20 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .trader-form-header h2{margin:6px 0}
 .trader-form-actions{display:flex;gap:10px;flex-wrap:wrap}
 .trader-form-section h3,.fx-history h3{margin-bottom:12px}
+.trader-access{padding:16px;border:1px solid #eadfe6;border-radius:12px;background:#fff}
+.trader-access-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.trader-access-card{display:grid;gap:4px;padding:12px;border-radius:10px;background:#fbf8fa}
+.trader-access-card small{color:#6d5b66;font-size:12px}
+.trader-access-card strong{font-size:15px;color:#2d2730}
+.trader-access-note{margin:0 0 12px;color:#5c4d56;font-size:13px;line-height:1.6}
+.account-type{margin-inline-start:6px}
+.access-dialog{text-align:start}
+.access-dialog [data-slot=dialog-header]{text-align:start}
+.access-message{white-space:pre-line;line-height:1.7}
+.access-identity{display:grid;gap:2px;margin:0;padding:10px 12px;border-radius:8px;background:#fbf8fa}
+.access-error{margin:0;color:#a0244e;font-size:13px;font-weight:700}
+.access-dialog .access-dialog-actions{display:flex;flex-direction:row;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.access-dialog[dir=rtl] [data-slot=dialog-close]{right:auto;left:1rem}
 .trader-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
 .trader-form-grid .field-label{display:flex;flex-direction:column;gap:6px}
 .trader-form-grid select{height:46px;border:1px solid #dce2df;border-radius:7px;padding:0 12px;background:#fff}
@@ -414,7 +428,9 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .fx-pager{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
 .fx-pager div{display:flex;gap:8px;align-items:center}
 @media(max-width:760px){
-.trader-form-header,.trader-form-grid{grid-template-columns:1fr}
+.trader-form-header,.trader-form-grid,.trader-access-grid{grid-template-columns:1fr}
+.access-dialog .access-dialog-actions{flex-direction:column}
+.access-dialog .access-dialog-actions .btn{width:100%}
 .discount-add{grid-template-columns:1fr;grid-template-areas:"category" "percent" "button"}
 .discount-add-button,.discount-add>.field-label input{width:100%}
 .category-picker.trail .category-trail{flex-wrap:wrap}

@@ -1,11 +1,13 @@
+import logging
+import time
 from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth import login
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.db.models import Prefetch
+from django.db import IntegrityError, OperationalError, connection, transaction
+from django.db.models import F, Prefetch, Q
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
@@ -741,6 +743,80 @@ def _replace_trader_discounts(trader, rows):
 def set_trader_password(trader, password):
     trader.user.set_password(password)
     trader.user.save(update_fields=["password"])
+
+
+LAST_ADMIN_MESSAGE = (
+    "Cannot revoke the last active administrator. At least one active administrator must remain."
+)
+access_log = logging.getLogger("shop.access")
+
+
+class AdminAccessError(Exception):
+    def __init__(self, code, detail):
+        self.code = code
+        self.detail = detail
+
+
+def _lock_admin_rows(user_id):
+    """Serialize administrator changes. PostgreSQL locks the relevant users; SQLite locks on write."""
+    if connection.features.has_select_for_update:
+        list(
+            User.objects.select_for_update()
+            .filter(Q(pk=user_id) | Q(is_staff=True, is_active=True))
+            .order_by("pk")
+        )
+        return
+    User.objects.filter(pk=user_id).update(is_staff=F("is_staff"))
+
+
+def change_trader_admin(actor, trader, grant):
+    """Grant or remove application administration. is_staff is the only privilege this changes."""
+    if not getattr(actor, "is_authenticated", False) or not actor.is_active or not actor.is_staff:
+        raise PermissionDenied("Staff access is required.")
+    attempts = 3 if connection.vendor == "sqlite" else 2
+    for attempt in range(attempts):
+        try:
+            return _change_trader_admin(actor, trader, grant)
+        except OperationalError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    raise OperationalError("Could not update administrator access.")
+
+
+def _change_trader_admin(actor, trader, grant):
+    with transaction.atomic():
+        _lock_admin_rows(trader.user_id)
+        user = User.objects.get(pk=trader.user_id)
+        trader = Trader.objects.select_related("user", "price_list__currency").get(pk=trader.pk)
+        previous = bool(user.is_staff)
+        if grant:
+            if not user.is_active or not trader.is_active:
+                raise AdminAccessError("inactive_account", "This account is inactive.")
+            if previous:
+                return trader, False
+            user.is_staff = True
+            user.save(update_fields=["is_staff"])
+        else:
+            if not previous:
+                return trader, False
+            others = User.objects.filter(is_staff=True, is_active=True).exclude(pk=user.pk).exists()
+            if user.is_active and not others:
+                raise AdminAccessError("last_admin", LAST_ADMIN_MESSAGE)
+            user.is_staff = False
+            user.save(update_fields=["is_staff"])
+        access_log.info(
+            "admin_access actor_id=%s actor=%s target_user_id=%s target=%s action=%s previous_is_staff=%s new_is_staff=%s",
+            actor.pk,
+            actor.get_username(),
+            user.pk,
+            user.get_username(),
+            "promote" if grant else "revoke",
+            previous,
+            user.is_staff,
+        )
+        trader.user = user
+        return trader, True
 
 
 def save_currency(data, currency=None):

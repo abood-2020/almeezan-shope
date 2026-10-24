@@ -42,6 +42,8 @@ from shop.api.admin_views import (
     AdminTraderDetailView,
     AdminTraderListView,
     AdminTraderPasswordView,
+    AdminTraderPromoteView,
+    AdminTraderRevokeView,
     BulkImportView,
     ImportPreviewView,
 )
@@ -70,6 +72,8 @@ urlpatterns = [
     path("traders/", AdminTraderListView.as_view(), name="admin-traders"),
     path("traders/<str:trader_id>/", AdminTraderDetailView.as_view(), name="admin-trader-detail"),
     path("traders/<str:trader_id>/set-password/", AdminTraderPasswordView.as_view(), name="admin-trader-password"),
+    path("traders/<str:trader_id>/promote/", AdminTraderPromoteView.as_view(), name="admin-trader-promote"),
+    path("traders/<str:trader_id>/revoke/", AdminTraderRevokeView.as_view(), name="admin-trader-revoke"),
     path("currencies/", AdminCurrencyListView.as_view(), name="admin-currencies"),
     path("currencies/<str:code>/", AdminCurrencyDetailView.as_view(), name="admin-currency-detail"),
     path("price-lists/", AdminPriceListListView.as_view(), name="admin-price-lists"),

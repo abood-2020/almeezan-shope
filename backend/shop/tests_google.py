@@ -72,6 +72,7 @@ class GoogleTraderAuthTests(TestCase):
         self.assertEqual(trader.price_list.default_discount_percent, Decimal("0"))
         self.assertFalse(trader.user.is_staff)
         self.assertFalse(trader.user.is_superuser)
+        self.assertFalse(response.data["is_staff"])
         self.assertFalse(trader.user.has_usable_password())
         self.assertEqual(GoogleAccount.objects.get(user=trader.user).sub, "google-subject-1")
         self.assertEqual(User.objects.count(), before + 1)
@@ -158,6 +159,45 @@ class GoogleTraderAuthTests(TestCase):
             self.client.post("/api/auth/login/", {"username": "trader", "password": "wrong"}, format="json").status_code,
             401,
         )
+
+    def test_promoted_google_trader_keeps_admin_access_across_google_logins(self):
+        created = self.google()
+        self.assertEqual(created.status_code, 200, created.data)
+        self.assertFalse(created.data["is_staff"])
+        trader_id = created.data["trader"]["id"]
+        before_users = User.objects.count()
+        staff = APIClient()
+        self.assertEqual(
+            staff.post("/api/admin/auth/login/", {"username": "admin", "password": "demo123"}, format="json").status_code,
+            200,
+        )
+        promoted = staff.post(f"/api/admin/traders/{trader_id}/promote/")
+        self.assertEqual(promoted.status_code, 200, promoted.data)
+        self.assertTrue(promoted.data["is_staff"])
+        user = User.objects.get(email="new.trader@example.com")
+        self.assertTrue(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertFalse(user.has_usable_password())
+        again = self.google()
+        self.assertEqual(again.status_code, 200, again.data)
+        self.assertTrue(again.data["is_staff"])
+        user.refresh_from_db()
+        self.assertTrue(user.is_staff)
+        self.assertEqual(self.client.get("/api/admin/auth/me/").status_code, 200)
+        self.assertEqual(self.client.get("/api/admin/products/").status_code, 200)
+        self.assertEqual(User.objects.count(), before_users)
+        self.assertEqual(GoogleAccount.objects.filter(sub="google-subject-1").count(), 1)
+        revoked = staff.post(f"/api/admin/traders/{trader_id}/revoke/")
+        self.assertEqual(revoked.status_code, 200, revoked.data)
+        self.assertFalse(revoked.data["is_staff"])
+        self.client.logout()
+        after = self.google()
+        self.assertFalse(after.data["is_staff"])
+        user.refresh_from_db()
+        self.assertFalse(user.is_staff)
+        self.assertEqual(self.client.get("/api/admin/auth/me/").status_code, 403)
+        self.assertEqual(GoogleAccount.objects.get(sub="google-subject-1").user_id, user.pk)
+        self.assertEqual(User.objects.filter(email="new.trader@example.com").count(), 1)
 
     def test_missing_default_price_list_does_not_create_a_trader(self):
         PriceList.objects.filter(pk="standard").update(is_default=False)
