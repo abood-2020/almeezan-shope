@@ -208,6 +208,7 @@ def product_payload(product, price_list=None, quote=None, display_currency=None)
         "unit_en": product.unit_en,
         "min_qty": product.min_qty,
         "available": product.available,
+        "is_archived": getattr(product, "is_archived", False),
         "description_ar": product.description_ar,
         "description_en": product.description_en,
         "badge": product.badge,

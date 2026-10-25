@@ -28,6 +28,7 @@ from shop.api.admin_views import (
     AdminProductRuleListView,
     AdminProductColorImageView,
     AdminProductDetailView,
+    AdminProductRestoreView,
     AdminProductImageDetailView,
     AdminProductImageListView,
     AdminProductListView,
@@ -56,6 +57,7 @@ urlpatterns = [
     path("products/import-preview/", ImportPreviewView.as_view(), name="admin-import-preview"),
     path("products/", AdminProductListView.as_view(), name="admin-products"),
     path("products/<int:product_id>/", AdminProductDetailView.as_view(), name="admin-product-detail"),
+    path("products/<int:product_id>/restore/", AdminProductRestoreView.as_view(), name="admin-product-restore"),
     path("products/<int:product_id>/images/", AdminProductImageListView.as_view(), name="admin-product-images"),
     path(
         "products/<int:product_id>/images/<int:image_id>/",

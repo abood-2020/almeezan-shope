@@ -53,6 +53,8 @@ from shop.models import (
 )
 from shop.services import (
     add_product_image,
+    delete_product,
+    restore_product,
     catalog_products,
     delete_product_image,
     get_site_settings,
@@ -118,7 +120,14 @@ class AdminMeView(AdminAPIView):
 
 class AdminProductListView(AdminAPIView):
     def get(self, request):
-        return Response([admin_product_payload(product) for product in catalog_products()])
+        archived = request.query_params.get("archived")
+        if archived == "true":
+            products = catalog_products(include_archived=True).filter(is_archived=True)
+        elif archived == "all":
+            products = catalog_products(include_archived=True)
+        else:
+            products = catalog_products(include_archived=False)
+        return Response([admin_product_payload(product) for product in products])
 
     def post(self, request):
         serializer = ProductWriteSerializer(data=request.data)
@@ -129,7 +138,7 @@ class AdminProductListView(AdminAPIView):
 
 class AdminProductDetailView(AdminAPIView):
     def get(self, request, product_id):
-        return Response(admin_product_payload(get_object_or_404(catalog_products(), pk=product_id)))
+        return Response(admin_product_payload(get_object_or_404(catalog_products(include_archived=True), pk=product_id)))
 
     def patch(self, request, product_id):
         product = get_object_or_404(Product, pk=product_id)
@@ -137,6 +146,18 @@ class AdminProductDetailView(AdminAPIView):
         serializer.is_valid(raise_exception=True)
         product = _saved(save_product, serializer.validated_data, product)
         return Response(admin_product_payload(product))
+
+    def delete(self, request, product_id):
+        product = get_object_or_404(Product, pk=product_id)
+        result = delete_product(product)
+        return Response(result)
+
+
+class AdminProductRestoreView(AdminAPIView):
+    def post(self, request, product_id):
+        product = get_object_or_404(Product, pk=product_id)
+        restored = restore_product(product)
+        return Response(admin_product_payload(restored))
 
 
 class AdminProductImageListView(AdminAPIView):

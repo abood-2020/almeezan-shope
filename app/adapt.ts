@@ -15,6 +15,7 @@ export type ApiProduct = {
   unit_en: string;
   min_qty: number;
   available: boolean;
+  is_archived?: boolean;
   description_ar: string;
   description_en: string;
   badge: string;
@@ -125,6 +126,7 @@ export function productFromApi(row: ApiProduct, categories: UiCategory[], useBas
     unitEn: row.unit_en,
     min: row.min_qty,
     available: row.available,
+    isArchived: !!row.is_archived,
     image: main,
     gallery: (row.gallery || []).map(resolveMedia).filter(src => src && src !== main),
     badge: row.badge || undefined,

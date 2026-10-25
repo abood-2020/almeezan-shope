@@ -307,6 +307,7 @@ class FaqWriteSerializer(serializers.Serializer):
 
 def admin_product_payload(product):
     data = product_payload(product)
+    data["is_archived"] = getattr(product, "is_archived", False)
     data["base_price_ils"] = money(product.base_price_ils)
     data["base_price_usd"] = money(product.base_price_usd)
     data["base_currency"] = product.base_currency_id

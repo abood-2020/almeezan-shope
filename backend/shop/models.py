@@ -141,6 +141,7 @@ class Product(models.Model):
     unit_en = models.CharField(max_length=40)
     min_qty = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     available = models.BooleanField(default=True)
+    is_archived = models.BooleanField(default=False, db_index=True)
     description_ar = models.TextField(blank=True)
     description_en = models.TextField(blank=True)
     badge = models.CharField(max_length=40, blank=True)

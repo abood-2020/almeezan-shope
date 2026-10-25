@@ -67,13 +67,15 @@ def login_trader(request, username, password):
     return trader
 
 
-def catalog_products(trader=None):
+def catalog_products(trader=None, include_archived=False):
     queryset = Product.objects.select_related("category", "base_currency", "original_currency").prefetch_related(
         "images",
         "colors",
         "sizes",
         "options",
     )
+    if not include_archived:
+        queryset = queryset.filter(is_archived=False)
     if trader is not None:
         queryset = queryset.prefetch_related(
             Prefetch(
@@ -98,6 +100,8 @@ def prepare_order_lines(trader, items, acknowledge_price_changes=False, display_
             product = Product.objects.select_related("base_currency", "original_currency", "category").get(pk=item["product_id"])
         except Product.DoesNotExist:
             _line_error(index, "Unknown product.")
+        if getattr(product, "is_archived", False):
+            _line_error(index, "This product is no longer available.")
         if not product.available:
             _line_error(index, "This product is unavailable.")
         option = ProductOption.objects.filter(product=product, label=item["option"]).first()
@@ -383,7 +387,7 @@ def _reject_blob(value, field):
 
 
 def _product_queryset():
-    return catalog_products()
+    return catalog_products(include_archived=True)
 
 
 PRODUCT_FIELDS = (
@@ -405,6 +409,48 @@ PRODUCT_FIELDS = (
     "badge",
 )
 
+
+
+
+def delete_product(product):
+    """
+    Safely delete or archive a product.
+    If the product has historical dependencies (e.g. order lines), it is archived
+    (soft deleted) to protect historical and financial integrity.
+    If it has no historical dependencies, it is permanently deleted within an atomic transaction.
+    """
+    with transaction.atomic():
+        has_history = product.order_lines.exists()
+        if has_history:
+            product.is_archived = True
+            product.save(update_fields=["is_archived", "updated_at"])
+            return {
+                "status": "archived",
+                "archived": True,
+                "product_id": product.id,
+                "message": "Product has order history and was archived safely.",
+                "message_ar": "تمت أرشفة المنتج بأمان مع الاحتفاظ بسجلات الطلبات السابقة.",
+            }
+        else:
+            product_id = product.id
+            product.delete()
+            return {
+                "status": "deleted",
+                "archived": False,
+                "product_id": product_id,
+                "message": "Product deleted successfully.",
+                "message_ar": "تم حذف المنتج بنجاح.",
+            }
+
+
+def restore_product(product):
+    """
+    Restore an archived product back to the active catalog.
+    """
+    with transaction.atomic():
+        product.is_archived = False
+        product.save(update_fields=["is_archived", "updated_at"])
+        return _product_queryset().get(pk=product.pk)
 
 def save_product(data, product=None):
     creating = product is None

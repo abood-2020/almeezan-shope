@@ -461,3 +461,12 @@ body{color:#302a30;background:#fff}h1,h2,h3,h4{color:#29232a}button:focus-visibl
 .import-thumb{width:48px;height:48px;object-fit:cover;border-radius:6px;background:#f4eff2}
 .import-url{display:block;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:700px){.social-editor-row,.import-map-row{grid-template-columns:1fr}.import-dialog{width:calc(100vw - 16px)}}
+
+/* Product Deletion and Archival UI */
+.product-editor-delete{min-height:42px;padding:8px 18px;border-radius:7px;font-size:14px;font-weight:800;border:1px solid #f2c7d5;background:#fff5f8;color:#a0244e;display:inline-flex;align-items:center;gap:6px;cursor:pointer;transition:background .15s ease}
+.product-editor-delete:hover{background:#fee9f0;border-color:#e89ab3}
+.icon-btn.danger{color:#ba7165}
+.icon-btn.danger:hover{background:#fee9f0;color:#a0244e}
+.product-delete-dialog .access-identity{background:#fff7f9;border:1px solid #f6dbe3}
+.product-delete-dialog .btn-danger{background:#a0244e;border-color:#a0244e;color:#fff}
+.product-delete-dialog .btn-danger:hover{background:#871c40;border-color:#871c40}
