@@ -10,6 +10,7 @@ export type ApiProduct = {
   name_ar: string;
   name_en: string;
   code: string;
+  factory_code?: string;
   category_id: number;
   unit_ar: string;
   unit_en: string;
@@ -115,6 +116,7 @@ export function productFromApi(row: ApiProduct, categories: UiCategory[], useBas
     ar: row.name_ar,
     en: row.name_en,
     code: row.code,
+    factory_code: row.factory_code || "",
     cat: categoryIndex > 0 ? categoryIndex : 1,
     price: source == null || source === "" ? Number.NaN : Number(source),
     sellingPrice: row.price == null || row.price === "" ? Number.NaN : Number(row.price),
@@ -248,6 +250,7 @@ export function productWriteBody(product: Product, categoryId: number) {
     name_ar: product.ar,
     name_en: product.en,
     code: product.code,
+    factory_code: product.factory_code || "",
     category_id: categoryId,
     original_price: original,
     original_currency: currency,

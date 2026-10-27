@@ -16,7 +16,8 @@ class ColorWriteSerializer(serializers.Serializer):
 class ProductWriteSerializer(serializers.Serializer):
     name_ar = serializers.CharField(max_length=200, required=False)
     name_en = serializers.CharField(max_length=200, required=False)
-    code = serializers.CharField(max_length=64, required=False)
+    code = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    factory_code = serializers.CharField(max_length=64, required=False, allow_blank=True)
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(), source="category", required=False
     )

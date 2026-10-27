@@ -129,3 +129,23 @@ class ProductImportLanguageTests(TestCase):
         self.assertEqual(invalid_number.status_code, 400)
         self.assertIn("invalid minimum", invalid_number.data["rows"][0])
         self.assertEqual(Product.objects.count(), before)
+
+    def test_available_defaults_to_true_when_omitted_or_empty(self):
+        row_empty_available = self.arabic_row(**{'كود المنتج': 'RW-DEF-AVAIL-1', 'متاح': ''})
+        row_none_available = self.arabic_row(**{'كود المنتج': 'RW-DEF-AVAIL-2', 'متاح': None})
+        row_omitted_available = self.arabic_row(**{'كود المنتج': 'RW-DEF-AVAIL-3'})
+        del row_omitted_available['متاح']
+        row_explicit_zero = self.arabic_row(**{'كود المنتج': 'RW-DEF-AVAIL-4', 'متاح': 0})
+        row_arabic_yes = self.arabic_row(**{'كود المنتج': 'RW-DEF-AVAIL-5', 'متاح': 'نعم'})
+
+        response = self.client.post(
+            '/api/admin/products/bulk-import/',
+            {'rows': [row_empty_available, row_none_available, row_omitted_available, row_explicit_zero, row_arabic_yes], 'lang': 'ar'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(Product.objects.get(code='RW-DEF-AVAIL-1').available)
+        self.assertTrue(Product.objects.get(code='RW-DEF-AVAIL-2').available)
+        self.assertTrue(Product.objects.get(code='RW-DEF-AVAIL-3').available)
+        self.assertFalse(Product.objects.get(code='RW-DEF-AVAIL-4').available)
+        self.assertTrue(Product.objects.get(code='RW-DEF-AVAIL-5').available)

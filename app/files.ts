@@ -51,6 +51,7 @@ export async function downloadAdminExcel(tab: string, rows: any[], lang: 'ar' | 
     sheet = label('المنتجات', 'Products');
     mapped = rows.map(row => ({
       [label('كود المنتج', 'Product Code')]: String(row.code ?? ''),
+      [label('كود المصنع', 'Factory Code')]: String(row.factory_code ?? ''),
       [label('اسم المنتج', 'Product Name')]: english ? row.en : row.ar,
       [label('الاسم بالعربية', 'Arabic name')]: row.ar,
       [label('الاسم بالإنجليزية', 'English name')]: row.en,
@@ -73,12 +74,12 @@ export async function downloadAdminExcel(tab: string, rows: any[], lang: 'ar' | 
       [label('نشط', 'Active')]: row.active ? 1 : 0,
     }));
   }
-  await exportExcel(mapped, `Riwaq-${tab}`, {sheet, rtl: !english});
+  await exportExcel(mapped, `Algharabli-${tab}`, {sheet, rtl: !english});
 }
 export const columns = productTemplateColumns;
 export async function downloadTemplate(lang: ImportLang = 'ar', sampleCategoryId?: number) {
   const XLSX = await import('xlsx');
-  XLSX.writeFile(fillProductTemplate(XLSX, importLanguage(lang), sampleCategoryId), 'Riwaq-Product-Template.xlsx');
+  XLSX.writeFile(fillProductTemplate(XLSX, importLanguage(lang), sampleCategoryId), 'Algharabli-Product-Template.xlsx');
 }
 export async function readImport(file: File, products: Product[], categoryIds: number[] = [], lang: ImportLang = 'ar') {
   const XLSX = await import('xlsx');

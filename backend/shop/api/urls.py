@@ -2,6 +2,8 @@ from django.urls import include, path
 
 from shop.api.admin_urls import urlpatterns as admin_urlpatterns
 from shop.api.views import (
+    CartView,
+    CartMergeView,
     CategoryListView,
     CsrfView,
     CurrentPricingView,
@@ -32,6 +34,8 @@ urlpatterns = [
     path("catalog/products/", ProductListView.as_view(), name="catalog-products"),
     path("catalog/products/<int:product_id>/", ProductDetailView.as_view(), name="catalog-product-detail"),
     path("pricing/current/", CurrentPricingView.as_view(), name="pricing-current"),
+    path("cart/", CartView.as_view(), name="cart"),
+    path("cart/merge/", CartMergeView.as_view(), name="cart-merge"),
     path("orders/", OrderListCreateView.as_view(), name="orders"),
     path("orders/<str:order_number>/excel/", OrderExcelView.as_view(), name="order-excel"),
     path("orders/<str:order_number>/", OrderDetailView.as_view(), name="order-detail"),

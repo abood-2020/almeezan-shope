@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from shop.models import Category, Order, OrderLine
+from shop.models import CartItem, Category, Order, OrderLine
 
 
 def image_value(file_field, image_key):
@@ -18,6 +18,16 @@ def money(value):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(trim_whitespace=False, style={"input_type": "password"})
+
+class CartItemInputSerializer(serializers.Serializer):
+    product_id = serializers.IntegerField()
+    option = serializers.CharField(allow_blank=True, default="")
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class CartSyncSerializer(serializers.Serializer):
+    items = serializers.ListField(child=CartItemInputSerializer(), allow_empty=True)
+
 
 
 class OrderItemInputSerializer(serializers.Serializer):
@@ -203,6 +213,7 @@ def product_payload(product, price_list=None, quote=None, display_currency=None)
         "name_ar": product.name_ar,
         "name_en": product.name_en,
         "code": product.code,
+        "factory_code": getattr(product, "factory_code", "") or "",
         "category_id": product.category_id,
         "unit_ar": product.unit_ar,
         "unit_en": product.unit_en,

@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from shop.api.permissions import IsActiveTrader
 from shop.api.serializers import (
+    CartSyncSerializer,
     LoginSerializer,
     OrderCreateSerializer,
     OrderSerializer,
@@ -21,7 +22,8 @@ from shop.api.serializers import (
     trader_payload,
 )
 from shop.exports import export_language, invoice_workbook, order_workbook, xlsx_response
-from shop.models import Category, Invoice, Order, category_descendant_ids
+from django.db import transaction
+from shop.models import CartItem, Category, Invoice, Order, Product, category_descendant_ids
 from shop.pricing import PriceChangeRequired, quote_many
 from shop.google_auth import GoogleAuthError
 from shop.services import (
@@ -268,6 +270,7 @@ class OrderListCreateView(APIView):
                 serializer.validated_data.get("acknowledge_price_changes", False),
                 serializer.validated_data.get("display_currency"),
             )
+            CartItem.objects.filter(trader=trader).delete()
         except PriceChangeRequired as exc:
             return Response({"price_changed": True, "items": exc.items}, status=409)
         except DjangoValidationError as exc:
@@ -345,3 +348,96 @@ class InvoiceExcelView(APIView):
         if invoice is None:
             return Response({"detail": "Not found."}, status=404)
         return xlsx_response(invoice_workbook(invoice, export_language(request), get_site_settings()), f"Invoice_{invoice.number}.xlsx")
+
+
+class CartView(APIView):
+    permission_classes = [IsActiveTrader]
+
+    def get(self, request):
+        trader = get_active_trader(request.user)
+        items = CartItem.objects.filter(trader=trader).select_related("product").prefetch_related("product__images")
+        valid_items = []
+        for item in items:
+            if getattr(item.product, "is_archived", False):
+                item.delete()
+            else:
+                valid_items.append(item)
+        return Response({
+            "items": [
+                {
+                    "id": item.product_id,
+                    "key": f"{item.product_id}-{item.option}",
+                    "option": item.option,
+                    "qty": item.quantity,
+                    "product_code": item.product.code,
+                    "factory_code": getattr(item.product, "factory_code", "") or "",
+                    "name_ar": item.product.name_ar,
+                    "name_en": item.product.name_en,
+                    "min_qty": item.product.min_qty,
+                    "available": item.product.available,
+                }
+                for item in valid_items
+            ],
+            "count": sum(i.quantity for i in valid_items),
+        })
+
+    def put(self, request):
+        trader = get_active_trader(request.user)
+        serializer = CartSyncSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        items_data = serializer.validated_data["items"]
+        with transaction.atomic():
+            CartItem.objects.filter(trader=trader).delete()
+            created_items = []
+            for entry in items_data:
+                product = Product.objects.filter(pk=entry["product_id"], is_archived=False).first()
+                if not product:
+                    continue
+                qty = max(1, entry["quantity"])
+                opt = entry.get("option", "")
+                created_items.append(CartItem(trader=trader, product=product, option=opt, quantity=qty))
+            if created_items:
+                CartItem.objects.bulk_create(created_items)
+        return self.get(request)
+
+    def delete(self, request):
+        trader = get_active_trader(request.user)
+        CartItem.objects.filter(trader=trader).delete()
+        return Response({"items": [], "count": 0})
+
+
+class CartMergeView(APIView):
+    permission_classes = [IsActiveTrader]
+
+    def post(self, request):
+        trader = get_active_trader(request.user)
+        serializer = CartSyncSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        guest_items = serializer.validated_data["items"]
+
+        with transaction.atomic():
+            existing = {
+                (item.product_id, item.option): item
+                for item in CartItem.objects.filter(trader=trader).select_related("product")
+            }
+            for entry in guest_items:
+                product_id = entry["product_id"]
+                option = entry.get("option", "")
+                qty = max(1, entry["quantity"])
+                key = (product_id, option)
+                if key in existing:
+                    item = existing[key]
+                    item.quantity = max(item.quantity, qty)
+                    item.save(update_fields=["quantity", "updated_at"])
+                else:
+                    product = Product.objects.filter(pk=product_id, is_archived=False).first()
+                    if product:
+                        created = CartItem.objects.create(
+                            trader=trader,
+                            product=product,
+                            option=option,
+                            quantity=max(product.min_qty, qty),
+                        )
+                        existing[key] = created
+
+        return CartView().get(request)

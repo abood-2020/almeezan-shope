@@ -394,6 +394,7 @@ PRODUCT_FIELDS = (
     "name_ar",
     "name_en",
     "code",
+    "factory_code",
     "category",
     "base_price_ils",
     "base_price_usd",
@@ -452,17 +453,55 @@ def restore_product(product):
         product.save(update_fields=["is_archived", "updated_at"])
         return _product_queryset().get(pk=product.pk)
 
+def generate_product_code(category_id):
+    """
+    Generate sequential category-based internal code (e.g. 012-00001).
+    Ensures uniqueness against existing products (including archived) and historical order lines.
+    """
+    import re
+
+    category_id_int = int(category_id)
+    prefix = f"{category_id_int:03d}-"
+    product_codes = Product.objects.filter(code__startswith=prefix).values_list("code", flat=True)
+    order_codes = OrderLine.objects.filter(product_code__startswith=prefix).values_list("product_code", flat=True)
+    all_codes = set(product_codes).union(set(order_codes))
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    max_num = 0
+    for code_str in all_codes:
+        m = pattern.match(code_str)
+        if m:
+            try:
+                num = int(m.group(1))
+                if num > max_num:
+                    max_num = num
+            except ValueError:
+                pass
+    next_num = max_num + 1
+    new_code = f"{prefix}{next_num:05d}"
+    while Product.objects.filter(code=new_code).exists() or OrderLine.objects.filter(product_code=new_code).exists():
+        next_num += 1
+        new_code = f"{prefix}{next_num:05d}"
+    return new_code
+
+
 def save_product(data, product=None):
     creating = product is None
     with transaction.atomic():
         if creating:
             product = Product()
         for field in PRODUCT_FIELDS:
-            if field in data:
+            if field in data and field != "code":
                 setattr(product, field, data[field])
         _align_original_price(product, data)
-        if "code" in data:
-            product.code = data["code"].strip()
+        if creating:
+            code_candidate = data.get("code")
+            if code_candidate and str(code_candidate).strip():
+                product.code = str(code_candidate).strip()
+            else:
+                cat_id = data.get("category_id") or getattr(product.category, "id", None) or (product.category_id if hasattr(product, "category_id") else None)
+                product.code = generate_product_code(cat_id)
+        if "factory_code" in data:
+            product.factory_code = str(data["factory_code"] or "").strip()
         try:
             product.full_clean()
             product.save()
@@ -1118,7 +1157,61 @@ def update_site_settings(data, files=None):
     return setting
 
 
-def import_products(rows, lang="ar", category_map=None, embedded=None):
+def _import_single_image(url_val, embedded_bytes, say, fetch):
+    from shop.remote_images import ImageFetchError, assert_public_http_url, download_product_image, sniff_image
+
+    url = str(url_val or "").strip()
+    if url and embedded_bytes:
+        return say("row has both an image URL and an embedded image", "الصف يحتوي على رابط صورة وصورة مدمجة معًا"), None
+    if embedded_bytes:
+        kind = sniff_image(embedded_bytes)
+        if not kind:
+            return say("unsupported or corrupted image", "صورة غير مدعومة أو تالفة"), None
+        return None, (embedded_bytes, kind)
+    if not url:
+        return None, None
+    try:
+        assert_public_http_url(url)
+    except ImageFetchError as exc:
+        return say(exc.english, exc.arabic), None
+    if not fetch:
+        return None, None
+    try:
+        data, kind = download_product_image(url)
+    except ImageFetchError as exc:
+        return say(exc.english, exc.arabic), None
+    return None, (data, kind)
+
+
+def _import_images(row, embedded_pictures, say, fetch):
+    pictures = list(embedded_pictures or [])
+    has_secondary_cols = any(f"Additional_Image_{i}" in row or f"additional_image_{i}" in row for i in (1, 2, 3))
+    if len(pictures) > 1 and not has_secondary_cols:
+        return say("multiple images are anchored to this row", "أكثر من صورة مرتبطة بهذا الصف"), (None, [])
+
+    primary_err, primary_img = _import_single_image(
+        _import_cell(row, "Product_Image", "product_image"),
+        pictures[0] if len(pictures) > 0 else None,
+        say,
+        fetch,
+    )
+    if primary_err:
+        return primary_err, (None, [])
+
+    secondary_images = []
+    for i in (1, 2, 3):
+        sec_url = _import_cell(row, f"Additional_Image_{i}", f"additional_image_{i}")
+        sec_emb = pictures[i] if (has_secondary_cols and len(pictures) > i) else None
+        err, img = _import_single_image(sec_url, sec_emb, say, fetch)
+        if err:
+            return err, (None, [])
+        if img:
+            secondary_images.append(img)
+
+    return None, (primary_img, secondary_images)
+
+
+def import_products(rows, lang="ar", category_map=None, embedded=None, update_existing=False):
     english = str(lang or "").lower().startswith("en")
 
     def say(en, ar):
@@ -1131,7 +1224,8 @@ def import_products(rows, lang="ar", category_map=None, embedded=None):
 
     errors = []
     prepared = []
-    seen = set(Product.objects.values_list("code", flat=True))
+    batch_codes = set()
+    existing_codes = set(Product.objects.values_list("code", flat=True))
     categories = set(Category.objects.values_list("id", flat=True))
     embedded = embedded or {}
     for index, raw in enumerate(rows):
@@ -1141,16 +1235,18 @@ def import_products(rows, lang="ar", category_map=None, embedded=None):
             errors.append(say(f"{prefix}: duplicate columns", f"{prefix}: أعمدة مكررة"))
             continue
         row = _apply_category_map(row, categories, category_map)
-        problems = _import_problems(row, seen, categories, english)
-        image_problem, image = _import_image(row, embedded.get(index), say, fetch=not problems)
-        if image_problem:
-            problems.append(image_problem)
+        problems = _import_problems(row, batch_codes, existing_codes, categories, english, update_existing)
+        images_problem, image_tuple = _import_images(row, embedded.get(index), say, fetch=not problems)
+        if images_problem:
+            problems.append(images_problem)
         if problems:
             errors.append(f"{prefix}: " + " · ".join(problems))
             continue
-        code = str(_import_cell(row, "Code", "code")).strip()
-        seen.add(code)
-        prepared.append((_normalized_import_row(row, code), image))
+        code_raw = _import_cell(row, "Code", "code")
+        code = str(code_raw).strip() if code_raw not in (None, "") else ""
+        if code:
+            batch_codes.add(code)
+        prepared.append((_normalized_import_row(row, code), image_tuple))
     if errors:
         raise ValidationError({"rows": errors})
     created = []
@@ -1162,30 +1258,65 @@ def import_products(rows, lang="ar", category_map=None, embedded=None):
     ensure_store_currencies()
     try:
         with transaction.atomic():
-            for row, image in prepared:
-                product = Product.objects.create(
-                    category_id=row["category_id"],
-                    name_ar=row["name_ar"],
-                    name_en=row["name_en"],
-                    code=row["code"],
-                    base_price_ils=row["base_price_ils"],
-                    original_price=row["original_price"],
-                    original_currency_id=row["original_currency_code"],
-                    unit_ar=row["unit_ar"],
-                    unit_en=row["unit_en"],
-                    min_qty=row["min_qty"],
-                    available=row["available"],
-                    description_ar=row["description_ar"],
-                    description_en=row["description_en"],
-                )
-                if image:
-                    picture = ProductImage(product=product, is_primary=True, sort_order=0)
-                    filename = _import_image_name(product.code, image[1])
-                    picture.image.save(filename, ContentFile(image[0]), save=True)
-                    stored_names.append(picture.image.name)
+            for row, (primary_image, secondary_images) in prepared:
+                code = row["code"]
+                category_id = row["category_id"]
+                if not code:
+                    code = generate_product_code(category_id)
+
+                existing_product = Product.objects.filter(code=code).first()
+                if existing_product:
+                    product = existing_product
+                    product.category_id = category_id
+                    product.name_ar = row["name_ar"]
+                    product.name_en = row["name_en"]
+                    if row.get("factory_code"):
+                        product.factory_code = row["factory_code"]
+                    product.base_price_ils = row["base_price_ils"]
+                    product.original_price = row["original_price"]
+                    product.original_currency_id = row["original_currency_code"]
+                    product.unit_ar = row["unit_ar"]
+                    product.unit_en = row["unit_en"]
+                    product.min_qty = row["min_qty"]
+                    product.available = row["available"]
+                    product.description_ar = row["description_ar"]
+                    product.description_en = row["description_en"]
+                    product.save()
                 else:
+                    product = Product.objects.create(
+                        category_id=category_id,
+                        name_ar=row["name_ar"],
+                        name_en=row["name_en"],
+                        code=code,
+                        factory_code=row.get("factory_code", ""),
+                        base_price_ils=row["base_price_ils"],
+                        original_price=row["original_price"],
+                        original_currency_id=row["original_currency_code"],
+                        unit_ar=row["unit_ar"],
+                        unit_en=row["unit_en"],
+                        min_qty=row["min_qty"],
+                        available=row["available"],
+                        description_ar=row["description_ar"],
+                        description_en=row["description_en"],
+                    )
+                    ProductOption.objects.create(product=product, label="افتراضي / Default", is_available=True, sort_order=0)
+
+                if primary_image:
+                    picture = product.images.filter(is_primary=True).first() or ProductImage(product=product, is_primary=True, sort_order=0)
+                    filename = _import_image_name(product.code, primary_image[1])
+                    picture.image.save(filename, ContentFile(primary_image[0]), save=True)
+                    stored_names.append(picture.image.name)
+                elif not product.images.exists():
                     ProductImage.objects.create(product=product, image_key="men-shirt", is_primary=True, sort_order=0)
-                ProductOption.objects.create(product=product, label="افتراضي / Default", is_available=True, sort_order=0)
+
+                if secondary_images:
+                    for s_idx, sec_img in enumerate(secondary_images[:3], start=1):
+                        if sec_img:
+                            sec_picture = product.images.filter(is_primary=False, sort_order=s_idx).first() or ProductImage(product=product, is_primary=False, sort_order=s_idx)
+                            sec_filename = _import_image_name(f"{product.code}_sec_{s_idx}", sec_img[1])
+                            sec_picture.image.save(sec_filename, ContentFile(sec_img[0]), save=True)
+                            stored_names.append(sec_picture.image.name)
+
                 created.append(product.pk)
     except Exception:
         for name in stored_names:
@@ -1197,12 +1328,23 @@ def import_products(rows, lang="ar", category_map=None, embedded=None):
 _IMPORT_LABELS = {
     "code": "Code",
     "كود المنتج": "Code",
+    "factory_code": "Factory_Code",
+    "كود المصنع": "Factory_Code",
     "name_ar": "Name_AR",
     "اسم المنتج (عربي)": "Name_AR",
     "name_en": "Name_EN",
     "اسم المنتج (إنجليزي)": "Name_EN",
     "category_id": "Category_ID",
     "معرّف التصنيف": "Category_ID",
+    "تصنيف المنتج": "Category_ID",
+    "product category": "Category_ID",
+    "product_category": "Category_ID",
+    "additional_image_1": "Additional_Image_1",
+    "صورة فرعية 1": "Additional_Image_1",
+    "additional_image_2": "Additional_Image_2",
+    "صورة فرعية 2": "Additional_Image_2",
+    "additional_image_3": "Additional_Image_3",
+    "صورة فرعية 3": "Additional_Image_3",
     "unit_ar": "Unit_AR",
     "وحدة البيع (عربي)": "Unit_AR",
     "unit_en": "Unit_EN",
@@ -1259,23 +1401,40 @@ def _import_cell(row, *names):
     return None
 
 
-def _import_problems(row, seen, categories, english=True):
+def _parse_import_available(val):
+    if val is None:
+        return True
+    if isinstance(val, bool):
+        return val
+    text = str(val).strip().lower()
+    if text in ("0", "0.0", "false", "لا", "غير متاح", "no"):
+        return False
+    return True
+
+
+def _import_problems(row, seen_batch_codes, existing_codes, categories, english=True, update_existing=False):
     from decimal import InvalidOperation
 
     def say(en, ar):
         return en if english else ar
 
     problems = []
+    code_col_present = any(col in row for col in ("Code", "code", "كود المنتج"))
+    if not code_col_present:
+        problems.append(say("required fields", "حقول مطلوبة"))
     code = _import_cell(row, "Code", "code")
     name_ar = _import_cell(row, "Name_AR", "name_ar")
     name_en = _import_cell(row, "Name_EN", "name_en")
     unit_ar = _import_cell(row, "Unit_AR", "unit_ar")
     unit_en = _import_cell(row, "Unit_EN", "unit_en")
-    if not all(value is not None and str(value).strip() for value in (code, name_ar, name_en, unit_ar, unit_en)):
+    if not all(value is not None and str(value).strip() for value in (name_ar, name_en, unit_ar, unit_en)):
         problems.append(say("required fields", "حقول مطلوبة"))
     code_text = "" if code is None else str(code).strip()
-    if code_text and code_text in seen:
-        problems.append(say("duplicate code", "كود مكرر"))
+    if code_text:
+        if code_text in seen_batch_codes:
+            problems.append(say("duplicate code", "كود مكرر"))
+        elif not update_existing and code_text in existing_codes:
+            problems.append(say("duplicate code", "كود مكرر"))
     category_raw = _import_cell(row, "Category_ID", "category_id")
     category_id = _import_int(category_raw)
     if category_id is None or category_id not in categories:
@@ -1289,9 +1448,6 @@ def _import_problems(row, seen, categories, english=True):
             problems.append(say("invalid minimum", "الحد الأدنى غير صالح"))
     price_problems = _import_price_problems(row, say)
     problems.extend(price_problems)
-    available = _import_cell(row, "Available", "available")
-    if str(available) not in {"0", "1"}:
-        problems.append(say("Available must be 0 or 1", "متاح يجب أن يكون 0 أو 1"))
     return problems
 
 
@@ -1429,6 +1585,7 @@ def _import_int(value):
 def _normalized_import_row(row, code):
     return {
         "code": code,
+        "factory_code": str(_import_cell(row, "Factory_Code", "factory_code") or "").strip(),
         "name_ar": str(_import_cell(row, "Name_AR", "name_ar")).strip(),
         "name_en": str(_import_cell(row, "Name_EN", "name_en")).strip(),
         "category_id": _import_int(_import_cell(row, "Category_ID", "category_id")),
@@ -1438,7 +1595,7 @@ def _normalized_import_row(row, code):
         "original_currency_code": _resolved_import_price(row)[0],
         "original_price": _resolved_import_price(row)[1],
         "base_price_ils": _resolved_import_price(row)[2],
-        "available": str(_import_cell(row, "Available", "available")) == "1",
+        "available": _parse_import_available(_import_cell(row, "Available", "available")),
         "description_ar": str(row.get("Description_AR") or row.get("description_ar") or "").strip(),
         "description_en": str(row.get("Description_EN") or row.get("description_en") or "").strip(),
     }

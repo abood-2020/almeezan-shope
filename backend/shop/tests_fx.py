@@ -155,7 +155,7 @@ class OriginalPriceTests(TestCase):
             pricing_mode="rule_based",
             default_discount_percent=Decimal("0"),
         )
-        publish_rates(date(2026, 10, 10), {"USD": Decimal("1"), "CNY": Decimal("7.20000000"), "ILS": Decimal("3.60000000")})
+        publish_rates(timezone.localdate(), {"USD": Decimal("1"), "CNY": Decimal("7.20000000"), "ILS": Decimal("3.60000000")})
 
     def setUp(self):
         self.client = APIClient()
@@ -243,7 +243,7 @@ class TraderPricingTests(TestCase):
     def setUpTestData(cls):
         call_command("seed_initial_data")
         cls.staff = User.objects.create_user("discount-staff", password="staff-pass", is_staff=True)
-        publish_rates(date(2026, 10, 10), {"USD": Decimal("1"), "CNY": Decimal("7.20000000"), "ILS": Decimal("3.60000000")})
+        publish_rates(timezone.localdate(), {"USD": Decimal("1"), "CNY": Decimal("7.20000000"), "ILS": Decimal("3.60000000")})
 
     def setUp(self):
         self.client = APIClient()
@@ -384,7 +384,7 @@ class TraderPricingTests(TestCase):
         self.assertEqual(line.discount_percent, Decimal("7.00"))
         self.assertEqual(line.unit_price, Decimal("12.92"))
         self.assertEqual(line.order.rate_provider, "frankfurter")
-        self.assertEqual(line.order.rate_provider_date, date(2026, 10, 10))
+        self.assertEqual(line.order.rate_provider_date, timezone.localdate())
         publish_rates(date(2026, 10, 12), {"USD": Decimal("1"), "CNY": Decimal("8.00000000"), "ILS": Decimal("4.00000000")})
         line.refresh_from_db()
         self.assertEqual(line.unit_price, Decimal("12.92"))

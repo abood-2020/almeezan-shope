@@ -104,6 +104,7 @@ class Product(models.Model):
     name_ar = models.CharField(max_length=200)
     name_en = models.CharField(max_length=200)
     code = models.CharField(max_length=64, unique=True)
+    factory_code = models.CharField(max_length=64, blank=True, default="", db_index=True)
     base_price_ils = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -606,6 +607,27 @@ class GoogleAccount(models.Model):
         return self.email
 
 
+class CartItem(models.Model):
+    """Persistent server-side cart item for an authenticated trader."""
+
+    trader = models.ForeignKey(Trader, on_delete=models.CASCADE, related_name="cart_items")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="cart_items")
+    option = models.CharField(max_length=200, default="", blank=True)
+    quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(fields=["trader", "product", "option"], name="unique_cart_item_trader_product_option"),
+            models.CheckConstraint(check=models.Q(quantity__gte=1), name="cart_item_quantity_gte_1"),
+        ]
+
+    def __str__(self):
+        return f"{self.trader_id} - {self.product.code} ({self.option}) x{self.quantity}"
+
+
 class Order(models.Model):
     class Status(models.TextChoices):
         REVIEW = "review", "Under review"
@@ -717,12 +739,12 @@ class Invoice(models.Model):
 
 class SiteSetting(models.Model):
     company_whatsapp_number = models.CharField(max_length=20, blank=True, default="")
-    name_ar = models.CharField(max_length=80, default="رِواق")
-    name_en = models.CharField(max_length=80, default="Riwaq")
+    name_ar = models.CharField(max_length=80, default="الغرابلي جلوبال")
+    name_en = models.CharField(max_length=80, default="Algharabli Global")
     tagline_ar = models.CharField(max_length=160, default="مساحة واحدة. فرص تجارية أوسع.")
     tagline_en = models.CharField(max_length=160, default="One place. A world of business possibilities.")
     header_caption_ar = models.CharField(max_length=80, default="تجارة الجملة")
-    header_caption_en = models.CharField(max_length=80, default="RIWAQ · WHOLESALE")
+    header_caption_en = models.CharField(max_length=80, default="ALGHARABLI GLOBAL · WHOLESALE")
     logo = models.FileField(upload_to="brand/", blank=True)
     logo_alt_ar = models.CharField(max_length=120, blank=True, default="")
     logo_alt_en = models.CharField(max_length=120, blank=True, default="")
@@ -733,26 +755,26 @@ class SiteSetting(models.Model):
     address_en = models.CharField(max_length=240, blank=True, default="")
     instagram_url = models.URLField(blank=True, default="")
     facebook_url = models.URLField(blank=True, default="")
-    seo_title_ar = models.CharField(max_length=120, default="رِواق | أزياء الجملة للتجار")
-    seo_title_en = models.CharField(max_length=120, default="Riwaq | Wholesale fashion for traders")
+    seo_title_ar = models.CharField(max_length=120, default="الغرابلي جلوبال | أزياء الجملة للتجار")
+    seo_title_en = models.CharField(max_length=120, default="Algharabli Global | Wholesale fashion for traders")
     seo_description_ar = models.TextField(
         blank=True,
-        default="اكتشف تشكيلة رِواق للملابس بالجملة، راجع الألوان والمقاسات وأرسل طلبك التجاري.",
+        default="اكتشف تشكيلة الغرابلي جلوبال للملابس بالجملة، راجع الألوان والمقاسات وأرسل طلبك التجاري.",
     )
     seo_description_en = models.TextField(
         blank=True,
-        default="Explore Riwaq wholesale fashion, review colors and sizes, and send your trade request.",
+        default="Explore Algharabli Global wholesale fashion, review colors and sizes, and send your trade request.",
     )
     og_image = models.FileField(upload_to="brand/", blank=True)
     hero_video = models.FileField(upload_to="brand/video/", blank=True)
     hero_video_url = models.URLField(blank=True, default="")
     hero_poster = models.FileField(upload_to="brand/", blank=True)
-    footer_explore_ar = models.CharField(max_length=80, default="اكتشف رِواق")
-    footer_explore_en = models.CharField(max_length=80, default="Explore Riwaq")
+    footer_explore_ar = models.CharField(max_length=80, default="اكتشف الغرابلي جلوبال")
+    footer_explore_en = models.CharField(max_length=80, default="Explore Algharabli Global")
     footer_account_ar = models.CharField(max_length=80, default="حسابك وطلباتك")
     footer_account_en = models.CharField(max_length=80, default="Your account & orders")
-    copyright_ar = models.CharField(max_length=80, default="رِواق للتجارة")
-    copyright_en = models.CharField(max_length=80, default="Riwaq Trade")
+    copyright_ar = models.CharField(max_length=80, default="الغرابلي جلوبال للتجارة")
+    copyright_en = models.CharField(max_length=80, default="Algharabli Global Trade")
     footer_note_ar = models.CharField(max_length=80, default="مصمم لتجارة أبسط")
     footer_note_en = models.CharField(max_length=80, default="Made for simpler business")
     footer_place_ar = models.CharField(max_length=80, default="فلسطين · العالم")

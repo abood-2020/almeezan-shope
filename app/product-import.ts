@@ -1,10 +1,11 @@
 export type ImportLang = 'ar' | 'en';
 
 export const PRODUCT_TEMPLATE_FIELDS = [
-  {key: 'Code', ar: 'كود المنتج', sample: 'RW-NEW-001'},
+  {key: 'Code', ar: 'كود المنتج', sample: ''},
+  {key: 'Factory_Code', ar: 'كود المصنع', sample: 'FCT-901'},
   {key: 'Name_AR', ar: 'اسم المنتج (عربي)', sample: 'منتج جديد'},
   {key: 'Name_EN', ar: 'اسم المنتج (إنجليزي)', sample: 'New product'},
-  {key: 'Category_ID', ar: 'معرّف التصنيف', sample: ''},
+  {key: 'Category_ID', ar: 'تصنيف المنتج', sample: ''},
   {key: 'Unit_AR', ar: 'وحدة البيع (عربي)', sample: 'قطعة'},
   {key: 'Unit_EN', ar: 'وحدة البيع (إنجليزي)', sample: 'piece'},
   {key: 'Min_Qty', ar: 'الحد الأدنى للكمية', sample: 6},
@@ -14,9 +15,30 @@ export const PRODUCT_TEMPLATE_FIELDS = [
   {key: 'Description_AR', ar: 'الوصف (عربي)', sample: 'وصف المنتج'},
   {key: 'Description_EN', ar: 'الوصف (إنجليزي)', sample: 'Product description'},
   {key: 'Product_Image', ar: 'صورة المنتج', sample: ''},
+  {key: 'Additional_Image_1', ar: 'صورة إضافية 1', sample: ''},
+  {key: 'Additional_Image_2', ar: 'صورة إضافية 2', sample: ''},
+  {key: 'Additional_Image_3', ar: 'صورة إضافية 3', sample: ''},
 ] as const;
 
 const LEGACY_HEADERS: Record<string, string> = {
+  factory_code: 'Factory_Code',
+  'factory code': 'Factory_Code',
+  'كود المصنع': 'Factory_Code',
+  'product category': 'Category_ID',
+  'product_category': 'Category_ID',
+  'product_category': 'Category_ID',
+  'تصنيف المنتج': 'Category_ID',
+  'تصنيف': 'Category_ID',
+  'معرف التصنيف': 'Category_ID',
+  'معرّف التصنيف': 'Category_ID',
+  'category': 'Category_ID',
+  'category_id': 'Category_ID',
+  additional_image_1: 'Additional_Image_1',
+  additional_image_2: 'Additional_Image_2',
+  additional_image_3: 'Additional_Image_3',
+  'صورة إضافية 1': 'Additional_Image_1',
+  'صورة إضافية 2': 'Additional_Image_2',
+  'صورة إضافية 3': 'Additional_Image_3',
   code: 'Code',
   name_ar: 'Name_AR',
   name_en: 'Name_EN',
@@ -108,6 +130,14 @@ export function applyCategoryMappings(rows: Record<string, unknown>[], mappings:
   });
 }
 
+export function parseImportAvailable(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'boolean') return value;
+  const s = String(value).trim().toLowerCase();
+  if (s === '0' || s === 'false' || s === 'لا' || s === 'غير متاح' || s === 'no') return false;
+  return true;
+}
+
 export function inspectProductImport(matrix: unknown[][], existingCodes: Iterable<string>, categoryIds: number[], lang: ImportLang = 'ar'): ImportInspection {
   const header = ((matrix[0] || []) as unknown[]);
   const errors: string[] = [];
@@ -121,7 +151,7 @@ export function inspectProductImport(matrix: unknown[][], existingCodes: Iterabl
     }
     indexByField.set(field, index);
   });
-  const optional = new Set(['Original_Currency', 'Original_Price', 'Base_Price_ILS', 'Product_Image']);
+  const optional = new Set(['Code', 'Factory_Code', 'Original_Currency', 'Original_Price', 'Base_Price_ILS', 'Product_Image', 'Additional_Image_1', 'Additional_Image_2', 'Additional_Image_3', 'Available']);
   for (const field of PRODUCT_TEMPLATE_FIELDS) {
     if (optional.has(field.key)) continue;
     if (!indexByField.has(field.key)) {
@@ -151,9 +181,12 @@ export function reviewImportRows(rows: Record<string, unknown>[], excelRows: num
   const categoryGroups = new Map<string, number[]>();
   rows.forEach((row, index) => {
     const problems: string[] = [];
-    if (!row.Code || !row.Name_AR || !row.Name_EN || !row.Unit_AR || !row.Unit_EN) problems.push(phrase(lang, 'حقول مطلوبة', 'required fields'));
-    if (codes.has(String(row.Code))) problems.push(phrase(lang, 'كود مكرر', 'duplicate code'));
-    codes.add(String(row.Code));
+    if (!row.Name_AR || !row.Name_EN || !row.Unit_AR || !row.Unit_EN) problems.push(phrase(lang, 'حقول مطلوبة', 'required fields'));
+    const codeStr = String(row.Code || '').trim();
+    if (codeStr) {
+      if (codes.has(codeStr)) problems.push(phrase(lang, 'كود مكرر', 'duplicate code'));
+      codes.add(codeStr);
+    }
     const categoryId = Number(row.Category_ID);
     if (!Number.isInteger(categoryId) || !categoryIds.includes(categoryId)) {
       const shown = String(row.Category_ID ?? '').trim();
@@ -161,8 +194,10 @@ export function reviewImportRows(rows: Record<string, unknown>[], excelRows: num
       const key = shown;
       categoryGroups.set(key, [...(categoryGroups.get(key) || []), excelRows[index]]);
     }
-    const imageProblem = imageUrlProblem(row.Product_Image, lang);
-    if (imageProblem) problems.push(imageProblem);
+    for (const imgKey of ['Product_Image', 'Additional_Image_1', 'Additional_Image_2', 'Additional_Image_3'] as const) {
+      const imageProblem = imageUrlProblem(row[imgKey], lang);
+      if (imageProblem) problems.push(`${fieldLabel(lang, imgKey)}: ${imageProblem}`);
+    }
     if (!Number.isInteger(Number(row.Min_Qty)) || Number(row.Min_Qty) < 1) problems.push(phrase(lang, 'الحد الأدنى غير صالح', 'invalid minimum'));
     const legacy = row.Base_Price_ILS;
     const originalCurrency = String(row.Original_Currency ?? '').trim().toUpperCase();
@@ -177,7 +212,7 @@ export function reviewImportRows(rows: Record<string, unknown>[], excelRows: num
       else if (hasLegacy && originalCurrency !== 'ILS') problems.push(phrase(lang, 'لا تجمع السعر الأصلي بعملة غير الشيكل مع السعر الأساسي بالشيكل', 'ambiguous price columns'));
       else if (hasLegacy && originalCurrency === 'ILS' && Number(legacy) !== amount) problems.push(phrase(lang, 'السعر الأصلي لا يطابق السعر الأساسي بالشيكل', 'ambiguous price columns'));
     }
-    if (!['0', '1'].includes(String(row.Available))) problems.push(phrase(lang, 'متاح يجب أن يكون 0 أو 1', 'Available must be 0 or 1'));
+    row.Available = parseImportAvailable(row.Available) ? 1 : 0;
     if (problems.length) errors.push(`${phrase(lang, `صف ${excelRows[index]}`, `Row ${excelRows[index]}`)}: ${problems.join(' · ')}`);
   });
   const categoryProblems = [...categoryGroups].map(([value, problemRows]) => ({value, rows: problemRows}));

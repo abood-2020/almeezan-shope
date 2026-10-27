@@ -14,7 +14,7 @@ const validHex=(value:string)=>/^#[0-9a-fA-F]{6}$/.test(value);
 export default function ProductEditor({initial,lang,categories,onClose,onSave,onDelete}:Props){
  const en=lang==='en';const t=(ar:string,english:string)=>en?english:ar;
  const [draft,setDraft]=useState<Product>(()=>{
-  const base:Product={id:0,ar:'',en:'',code:'',cat:1,price:0,originalCurrency:'CNY',originalPrice:0,unit:'قطعة',unitEn:'piece',min:1,available:true,image:'',gallery:[],desc:'',descEn:'',options:[],colors:[],sizes:[],unavailableVariants:[]};
+  const base:Product={id:0,ar:'',en:'',code:'',factory_code:'',cat:1,price:0,originalCurrency:'CNY',originalPrice:0,unit:'قطعة',unitEn:'piece',min:1,available:true,image:'',gallery:[],desc:'',descEn:'',options:[],colors:[],sizes:[],unavailableVariants:[]};
   const merged:Product={...base,...initial,gallery:[...(initial?.gallery||[])],colors:(initial?.colors||[]).map(c=>({...c})),sizes:[...(initial?.sizes||[])],options:[...(initial?.options||[])],unavailableVariants:[...(initial?.unavailableVariants||[])]};
   const isNew=!initial?.id;
   if(!merged.originalCurrency) merged.originalCurrency=merged.priceReview?'':(isNew?'CNY':'ILS');
@@ -66,7 +66,7 @@ export default function ProductEditor({initial,lang,categories,onClose,onSave,on
   const options=colors.length?colors.flatMap(c=>sizes.map(size=>`${c.ar} / ${c.en} · ${size}`)):draft.options.map(x=>x.trim()).filter(Boolean);
   if(!options.length){setError(t('أضف الألوان والمقاسات أو خيار بيع واحدًا على الأقل.','Add colors and sizes or at least one selling option.'));return}
   const validVariants=(draft.unavailableVariants||[]).filter(x=>options.includes(x));
-  const saved={...draft,ar:draft.ar.trim(),en:draft.en.trim(),code:draft.code.trim(),unit:draft.unit.trim(),unitEn:draft.unitEn.trim(),colors,sizes,options,unavailableVariants:validVariants};
+  const saved={...draft,ar:draft.ar.trim(),en:draft.en.trim(),code:(draft.code||'').trim(),factory_code:(draft.factory_code||'').trim(),unit:draft.unit.trim(),unitEn:draft.unitEn.trim(),colors,sizes,options,unavailableVariants:validVariants};
   if(await onSave(saved))onClose();
  };
  return <Dialog open={!!initial} onOpenChange={open=>{if(!open)onClose()}}><DialogContent className="product-editor-dialog" dir={en?'ltr':'rtl'} showCloseButton={false} onEscapeKeyDown={event=>{if(document.querySelector('.category-picker-panel'))event.preventDefault()}}>
@@ -75,8 +75,13 @@ export default function ProductEditor({initial,lang,categories,onClose,onSave,on
    <section className="product-editor-section"><div className="product-section-head"><span>01</span><div><h3>{t('بيانات المنتج','Product details')}</h3><p>{t('الاسم والكود والتصنيف ومعلومات الطلب.','Name, code, category and ordering details.')}</p></div></div><div className="product-edit-grid">
     <label>{t('اسم المنتج بالعربية','Arabic product name')}<input required value={draft.ar} onChange={e=>update({ar:e.target.value})} placeholder={t('مثال: قميص كتان رجالي','E.g. linen shirt')}/></label>
     <label>{t('اسم المنتج بالإنجليزية','English product name')}<input required dir="ltr" value={draft.en} onChange={e=>update({en:e.target.value})} placeholder="Linen shirt"/></label>
-    <label>{t('كود المنتج','Product code')}<input required dir="ltr" value={draft.code} onChange={e=>update({code:e.target.value})} placeholder="RW-MN-001"/></label>
-    <CategoryPicker en={en} label={t('التصنيف','Category')} categories={categories.slice(1).filter(c=>c.id).map(c=>({id:c.id as number,ar:c.ar,en:c.en,parentId:c.parentId,level:c.level}))} value={categories[draft.cat]?.id??null} onChange={id=>{const index=categories.findIndex(c=>c.id===id);if(index>0)update({cat:index})}}/>
+    {draft.id ? (
+     <label>{t('كود المنتج الداخلي (غير قابل للتعديل)','Internal code (immutable)')}<input readOnly disabled dir="ltr" value={draft.code} style={{opacity:0.75,cursor:'not-allowed'}}/></label>
+    ) : (
+     <label>{t('كود المنتج الداخلي (تلقائي)','Internal code (auto)')}<input dir="ltr" value={draft.code} onChange={e=>update({code:e.target.value})} placeholder={t('تلقائي عند الحفظ (مثال 001-00001)','Auto on save (e.g. 001-00001)')}/></label>
+    )}
+    <label>{t('كود المصنع (اختياري)','Factory code (optional)')}<input dir="ltr" value={draft.factory_code||''} onChange={e=>update({factory_code:e.target.value})} placeholder={t('كود المصنع أو المورد','Factory or supplier code')}/></label>
+    <CategoryPicker en={en} showId={true} label={t('التصنيف','Category')} categories={categories.slice(1).filter(c=>c.id).map(c=>({id:c.id as number,ar:c.ar,en:c.en,parentId:c.parentId,level:c.level}))} value={categories[draft.cat]?.id??null} onChange={id=>{const index=categories.findIndex(c=>c.id===id);if(index>0)update({cat:index})}}/>
     <label>{t('وحدة البيع بالعربية','Unit in Arabic')}<input required value={draft.unit} onChange={e=>update({unit:e.target.value})}/></label>
     <label>{t('وحدة البيع بالإنجليزية','Unit in English')}<input required dir="ltr" value={draft.unitEn} onChange={e=>update({unitEn:e.target.value})}/></label>
     <label>{t('العملة الأصلية','Original currency')}<select required value={draft.originalCurrency||''} onChange={e=>update({originalCurrency:e.target.value as Product['originalCurrency']})}><option value="" disabled>{t('اختر العملة','Choose a currency')}</option><option value="CNY">CNY — {currencyNames.CNY}</option><option value="USD">USD — {currencyNames.USD}</option><option value="ILS">ILS — {currencyNames.ILS}</option></select></label>

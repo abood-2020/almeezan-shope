@@ -90,6 +90,10 @@ export default function StoreSettings({lang, onSaved}: Props) {
   };
 
   const saveBrand = async () => {
+    if (!form.brand.name_ar?.trim() || !form.brand.name_en?.trim()) {
+      setError(t('اسم المتجر بالعربية والإنجليزية مطلوبان ولا يمكن تركهما فارغين', 'Arabic and English store names are required and cannot be blank'));
+      return;
+    }
     setBusy(true); setError(''); setSaved('');
     const body = new FormData();
     ['name_ar', 'name_en', 'logo_alt_ar', 'logo_alt_en'].forEach(key => body.set(key, String(form.brand[key as keyof typeof form.brand] || '')));

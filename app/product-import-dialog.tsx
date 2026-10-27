@@ -104,7 +104,7 @@ export default function ProductImportDialog({open, onOpenChange, lang, products,
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent className="import-dialog" dir={en ? 'ltr' : 'rtl'}>
       <DialogTitle>{t('استيراد المنتجات من Excel', 'Import products from Excel')}</DialogTitle>
-      <DialogDescription>{t('استخدم قالب رواق الحالي، وأضف صورة عبر الرابط أو داخل عمود صورة المنتج.', 'Use the current Riwaq template and add a picture by URL or inside the product image column.')}</DialogDescription>
+      <DialogDescription>{t('استخدم قالب الغرابلي جلوبال الحالي، وأضف صورة عبر الرابط أو داخل عمود صورة المنتج.', 'Use the current Algharabli Global template and add a picture by URL or inside the product image column.')}</DialogDescription>
       <Button className="btn light" onClick={() => void downloadTemplate(lang, sampleCategoryId)}><Download size={17}/>{t('تنزيل القالب', 'Download template')}</Button>
       <label className="upload-zone"><Upload size={30}/><strong>{t('اختر ملف Excel', 'Choose an Excel file')}</strong><small><bdi>.xlsx · .xls</bdi>{name ? ` · ${name}` : ''}</small><input type="file" accept=".xlsx,.xls" onChange={event => {const next = event.target.files?.[0]; if (next) void choose(next);}}/></label>
       {notice && <p className="error-box" role="alert">{notice}</p>}
@@ -122,11 +122,11 @@ export default function ProductImportDialog({open, onOpenChange, lang, products,
         </div>)}
       </div>}
       {!!errors.length && <ul className="import-errors">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
-      {!!mapped.length && <div className="table-box import-preview"><table><thead><tr><th>{t('الكود', 'Code')}</th><th>{t('الاسم', 'Name')}</th><th>{t('التصنيف', 'Category')}</th><th>{t('الصورة', 'Image')}</th><th>{t('السعر', 'Price')}</th></tr></thead><tbody>{mapped.slice(0, 20).map((row, index) => {
+      {!!mapped.length && <div className="table-box import-preview"><table><thead><tr><th>{t('الكود', 'Code')}</th><th>{t('كود المصنع', 'Factory Code')}</th><th>{t('الاسم', 'Name')}</th><th>{t('التصنيف', 'Category')}</th><th>{t('الصورة', 'Image')}</th><th>{t('السعر', 'Price')}</th></tr></thead><tbody>{mapped.slice(0, 20).map((row, index) => {
         const excelRow = excelRows[index];
         const picture = embedded.find(item => item.row === excelRow && item.preview);
         const url = String(row.Product_Image || '').trim();
-        return <tr key={`${excelRow}-${String(row.Code)}`}><td><bdi>{String(row.Code || '')}</bdi></td><td>{en ? String(row.Name_EN || '') : String(row.Name_AR || '')}</td><td><bdi>{String(row.Category_ID ?? '')}</bdi></td><td>{picture?.preview ? <img className="import-thumb" src={picture.preview} alt=""/> : url ? <span className="import-url"><bdi>{url}</bdi></span> : t('بدون صورة', 'No image')}</td><td><bdi>{String(row.Original_Price ?? row.Base_Price_ILS ?? '')} {String(row.Original_Currency || '')}</bdi></td></tr>;
+        return <tr key={`${excelRow}-${String(row.Code)}`}><td><bdi>{String(row.Code || '')}</bdi></td><td><bdi>{String(row.Factory_Code || '—')}</bdi></td><td>{en ? String(row.Name_EN || '') : String(row.Name_AR || '')}</td><td><bdi>{String(row.Category_ID ?? '')}</bdi></td><td>{picture?.preview ? <img className="import-thumb" src={picture.preview} alt=""/> : url ? <span className="import-url"><bdi>{url}</bdi></span> : t('بدون صورة', 'No image')}</td><td><bdi>{String(row.Original_Price ?? row.Base_Price_ILS ?? '')} {String(row.Original_Currency || '')}</bdi></td></tr>;
       })}</tbody></table></div>}
       <div className="store-actions"><Button className="btn primary" disabled={busy || !mapped.length || !!errors.length} onClick={() => void confirm()}>{busy ? t('جارٍ الاستيراد…', 'Importing…') : t('اعتماد الاستيراد', 'Confirm import')}</Button></div>
     </DialogContent>

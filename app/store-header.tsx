@@ -7,7 +7,7 @@ import {catalogHref,type CatalogGroup} from './catalog-navigation';
 type DisplayCurrency='USD'|'ILS'|'CNY';
 type Props={lang:'ar'|'en';page:string;category:number;subcategory:string;groups:CatalogGroup[];logo:ReactNode;labels?:Record<string,string>;brandName?:string;accountLabel:string;cartCount:number;adminLabel?:string;displayCurrency?:DisplayCurrency;onCurrency?:(code:DisplayCurrency)=>void;onLanguage:()=>void;onAccount:()=>void;onAdmin?:()=>void;onNavigate:(page:string)=>void;onCatalog:(category?:number,subcategory?:string)=>void};
 export default function StoreHeader({lang,page,category,subcategory,groups,logo,labels,brandName,accountLabel,cartCount,adminLabel,displayCurrency,onCurrency,onLanguage,onAccount,onAdmin,onNavigate,onCatalog}:Props){
-  const en=lang==='en';const t=(ar:string,eng:string)=>en?eng:ar;const nav=(key:string,ar:string,eng:string)=>{const value=labels?.[en?key+'_en':key+'_ar'];return value?.trim()?value:t(ar,eng)};const brand=brandName||t('رواق','Riwaq');
+  const en=lang==='en';const t=(ar:string,eng:string)=>en?eng:ar;const nav=(key:string,ar:string,eng:string)=>{const value=labels?.[en?key+'_en':key+'_ar'];return value?.trim()?value:t(ar,eng)};const brand=brandName||t('الغرابلي جلوبال','Algharabli Global');
   const [mega,setMega]=useState(false);const [mobile,setMobile]=useState(false);
   const area=useRef<HTMLDivElement>(null);const trigger=useRef<HTMLButtonElement>(null);
   const timer=useRef<ReturnType<typeof setTimeout>|null>(null);const focusFirst=useRef(false);

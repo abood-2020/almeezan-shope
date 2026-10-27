@@ -17,6 +17,7 @@ type Props = {
   loading?: boolean;
   error?: string;
   trail?: boolean;
+  showId?: boolean;
 };
 
 type Row = PickerCategory & {depth: number; path: string; names: string[]; hasChildren: boolean};
@@ -34,7 +35,7 @@ export function CategoryTrail({names, en}: {names: string[]; en: boolean}) {
   </span>;
 }
 
-export default function CategoryPicker({categories, value, onChange, en, label, allowEmpty, emptyLabel, disabledReason, loading, error, trail}: Props) {
+export default function CategoryPicker({categories, value, onChange, en, label, allowEmpty, emptyLabel, disabledReason, loading, error, trail, showId}: Props) {
   const t = (ar: string, english: string) => en ? english : ar;
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -45,7 +46,7 @@ export default function CategoryPicker({categories, value, onChange, en, label, 
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const [active, setActive] = useState(0);
   const [box, setBox] = useState<PanelBox | null>(null);
-  const tree = useMemo(() => buildRows(categories, en), [categories, en]);
+  const tree = useMemo(() => buildRows(categories, en, showId), [categories, en, showId]);
   const byId = useMemo(() => new Map(tree.map(row => [row.id, row])), [tree]);
   const selected = value == null ? null : byId.get(value) || categories.find(category => category.id === value) || null;
   const searching = query.trim().length > 0;
@@ -174,7 +175,8 @@ export default function CategoryPicker({categories, value, onChange, en, label, 
     }
   };
 
-  const selectedPath = selected ? ('path' in selected ? selected.path : (en ? selected.en : selected.ar)) : '';
+  const baseName = selected ? (en ? selected.en : selected.ar) : '';
+  const selectedPath = selected ? ('path' in selected ? selected.path : (showId && selected.id ? `${selected.id} — ${baseName}` : baseName)) : '';
   const selectedNames = selected && 'names' in selected && selected.names.length ? selected.names : (selectedPath ? selectedPath.split(' / ') : []);
   const panel = open && box && typeof document !== 'undefined' ? createPortal(
     <div ref={panelRef} className="category-picker-panel" dir={en ? 'ltr' : 'rtl'} style={{top: box.top, left: box.left, width: box.width, maxHeight: box.maxHeight}}>
@@ -194,7 +196,8 @@ export default function CategoryPicker({categories, value, onChange, en, label, 
           const optionIndex = allowEmpty ? index + 1 : index;
           const reason = disabledReason?.(row) || '';
           const Chevron = en ? ChevronRight : ChevronLeft;
-          const name = en ? row.en : row.ar;
+          const baseName = en ? row.en : row.ar;
+          const name = showId && row.id ? `${row.id} — ${baseName}` : baseName;
           return <div key={row.id} role="option" aria-selected={value === row.id} aria-disabled={!!reason} data-active={active === optionIndex} className={'category-picker-option' + (active === optionIndex ? ' active' : '') + (value === row.id ? ' selected' : '') + (reason ? ' disabled' : '')} style={{paddingInlineStart: searching ? 8 : 8 + row.depth * 12}} onMouseEnter={() => setActive(optionIndex)}>
             {!searching && row.hasChildren ? <button type="button" className={'category-picker-expand' + (expanded.has(row.id) ? ' open' : '')} aria-label={expanded.has(row.id) ? t('طي', 'Collapse') : t('توسيع', 'Expand')} aria-expanded={expanded.has(row.id)} onClick={() => setExpanded(values => {const next = new Set(values); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next;})}><Chevron size={13}/></button> : <span className="category-picker-expand spacer"/>}
             <button type="button" className="category-picker-choice" disabled={!!reason} onClick={() => choose(row.id)}>
@@ -223,7 +226,7 @@ export default function CategoryPicker({categories, value, onChange, en, label, 
   </div>;
 }
 
-function buildRows(categories: PickerCategory[], en: boolean): Row[] {
+function buildRows(categories: PickerCategory[], en: boolean, showId?: boolean): Row[] {
   const children = new Map<number | null, PickerCategory[]>();
   categories.forEach(category => {
     const parent = category.parentId ?? null;
@@ -232,7 +235,8 @@ function buildRows(categories: PickerCategory[], en: boolean): Row[] {
   const rows: Row[] = [];
   const walk = (parent: number | null, depth: number, trail: string[]) => {
     (children.get(parent) || []).forEach(category => {
-      const name = en ? category.en : category.ar;
+      const baseName = en ? category.en : category.ar;
+      const name = showId && category.id ? `${category.id} — ${baseName}` : baseName;
       const names = [...trail, name];
       const path = names.join(' / ');
       const nested = children.get(category.id) || [];
@@ -243,7 +247,8 @@ function buildRows(categories: PickerCategory[], en: boolean): Row[] {
   walk(null, 0, []);
   const seen = new Set(rows.map(row => row.id));
   categories.filter(category => !seen.has(category.id)).forEach(category => {
-    const name = en ? category.en : category.ar;
+    const baseName = en ? category.en : category.ar;
+    const name = showId && category.id ? `${category.id} — ${baseName}` : baseName;
     rows.push({...category, depth: Math.max((category.level || 1) - 1, 0), path: name, names: [name], hasChildren: false});
   });
   return rows;
